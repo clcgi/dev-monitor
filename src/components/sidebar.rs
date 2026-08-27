@@ -46,48 +46,55 @@ pub fn Sidebar(props: SidebarProps) -> Element {
     });
 
     rsx! {
-        div {
-            class: "sidebar",
-            style: "width: 260px;",
-            
-            div {
-                class: "sidebar-head",
-                div { class: "sidebar-title", "DEV Scripts" }
+        // RESPONSIVE: the fixed 260px inline width is gone. Below `md` the list
+        // collapses to an icon rail -- on a narrow window the sidebar previously
+        // took a quarter of the screen and left the log viewer unusable.
+        aside {
+            class: "flex w-14 shrink-0 flex-col border-r border-edge bg-surface \
+                    md:w-56 lg:w-64",
+
+            div { class: "flex items-center justify-between px-3 pb-1 pt-3",
+                div {
+                    class: "hidden text-[10px] uppercase tracking-wider text-fg-faint md:block",
+                    "DEV Scripts"
+                }
+                // The rail still needs a heading at narrow widths; an icon is the
+                // only thing that fits.
+                i { class: "ph ph-list text-fg-faint md:hidden" }
             }
-            
-            div {
-                class: "sidebar-list",
-                
+
+            div { class: "min-h-0 flex-1 overflow-y-auto p-1.5",
                 if scripts.read().is_empty() {
-                    div { class: "sidebar-empty", "No scripts found in tools/" }
+                    div {
+                        class: "hidden px-3 py-5 text-[11px] leading-relaxed text-fg-faint md:block",
+                        "No scripts found in tools/"
+                    }
                 } else {
                     for script in scripts.read().clone() {
                         div {
+                            key: "{script}",
+                            // border-l-2 on BOTH states, transparent when off, so
+                            // selecting a row does not shift its contents by 2px.
                             class: if Some(&script) == props.selected_script.as_ref() {
-                                "sidebar-row sidebar-row-on"
+                                "flex cursor-pointer items-center gap-2 rounded-md border-l-2 \
+                                 border-brand bg-elevated px-2 py-2 justify-center md:justify-start"
                             } else {
-                                "sidebar-row"
+                                "flex cursor-pointer items-center gap-2 rounded-md border-l-2 \
+                                 border-transparent px-2 py-2 hover:bg-elevated justify-center \
+                                 md:justify-start"
                             },
+                            title: "{script}",
                             onclick: {
                                 let s = script.clone();
                                 move |_| props.on_select.call(s.clone())
                             },
-                            
-                            div { class: "forge-wrap",
-                                span {
-                                    class: "forge-icon forge-plain",
-                                    if script.ends_with(".py") {
-                                        "🐍"
-                                    } else {
-                                        "🐚"
-                                    }
-                                }
+
+                            span { class: "shrink-0 leading-none",
+                                if script.ends_with(".py") { "🐍" } else { "🐚" }
                             }
-                            div {
-                                class: "sidebar-main",
-                                div { class: "sidebar-label-row",
-                                    span { class: "sidebar-label", "{script.replace(\"tools/\", \"\")}" }
-                                }
+                            span {
+                                class: "hidden min-w-0 truncate text-xs text-fg-soft md:block",
+                                "{script.replace(\"tools/\", \"\")}"
                             }
                         }
                     }

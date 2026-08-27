@@ -1,2 +1,5 @@
 /target
+/node_modules
 /.dx
+package-lock.json
+package.json

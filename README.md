@@ -45,11 +45,36 @@ dx serve --platform web
 ```
 *Note: Ensure you have the `dioxus-cli` installed (`cargo install dioxus-cli`). When running on the web platform, certain system-level features like script execution (`tokio::process`) will be simulated or disabled due to browser security sandboxing.*
 
+## Styling — Tailwind CSS v4
+
+The UI is migrating from a hand-written stylesheet to Tailwind v4 utilities.
+**Both stylesheets are live during the migration**: `assets/tailwind.css` is injected
+first, `assets/main.css` second so its rules still win for components not yet
+converted. As a component moves, its rules are deleted from `main.css`.
+
+```bash
+npm install          # once; Node is a BUILD dependency only
+npm run build:css    # input.css -> assets/tailwind.css
+npm run watch:css    # rebuild on change, while you work
+```
+
+**`cargo run` still needs nothing but Rust.** The generated CSS is baked in with
+`include_str!`, and `assets/tailwind.css` is committed for exactly that reason —
+a contributor without Node can build and run the app, they just cannot restyle it.
+
+**Re-run `npm run build:css` after changing markup.** Tailwind scans `src/**/*.rs`
+for class names and emits only what it finds; a new utility that has not been
+generated is simply an unknown class, with no error anywhere.
+
 ## Theme Configuration
 
 The application supports four interconnected color palettes. The default is **Electric Autumn**. The application automatically detects your system's light/dark mode and applies the correct shade variations for the active palette.
 
-You can change the active palette by modifying the `<body>` tag class. For example, if it's set in the root `index.html` file or in the main component `src/main.rs`.
+**Pick one from the palette button in the top bar.** Previously this required editing
+the source and rebuilding — and in fact could not work at all: the app only ever set
+`light` on `<body>`, while every light rule is written `body.theme-x.light` and needs
+both classes. Light mode was therefore inert, and 8 of the 9 palette blocks were
+unreachable. Both are fixed; the palettes themselves are unchanged.
 
 The available palette classes are:
 1. `theme-electric-autumn` (Default)
@@ -68,3 +93,20 @@ If you wish to force the application into light mode regardless of the system th
 ```html
 <body class="theme-electric-autumn light">
 ```
+
+## Icons — Phosphor
+
+Icons are Phosphor web-font classes (`ph ph-database`), referenced from Rust in
+`workflow_stepper.rs` and elsewhere. The font is imported at the top of `input.css`.
+
+**Open finding: they are fetched from `unpkg.com` at runtime.** This is a desktop
+application that currently cannot draw its own icons without internet access — while a
+complete vendored copy already sits in `assets/phosphor/`, unused. Two ways to close it:
+
+| Option | Cost |
+|---|---|
+| Point `input.css` at `assets/phosphor/*/style.css` | Free, but relative font URLs resolve against the document, not the injected `<style>` — needs checking against the desktop asset root |
+| Inline `Phosphor.woff2` as a `data:` URI | Always works offline, adds **~192 KB** (base64 of 144 KB) to the binary |
+
+Not chosen here: it trades binary size against a network dependency, which is a call
+for whoever owns the distribution.

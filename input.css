@@ -1,0 +1,307 @@
+/* Tailwind v4 entry point for the DEV Monitor UI.
+ *
+ * BUILD:  npm run build:css   ->  assets/tailwind.css
+ * The generated file is baked into the binary with include_str!, so `cargo run`
+ * still needs nothing but Rust. Node is a BUILD-time dependency only.
+ *
+ * WHY @theme AND NOT A tailwind.config.js. Tailwind v4 derives utilities from
+ * CSS custom properties: every `--color-x` here yields `bg-x`, `text-x`,
+ * `border-x`. That means the palette IS the design system rather than a mirror
+ * of it, and -- the reason it matters for this app -- a theme can be swapped at
+ * RUNTIME by overriding the same variables under a body class. A JS config
+ * would bake the palette in at build time and make the four themes impossible
+ * without four builds.
+ *
+ * The variables were renamed on the way in: `--color-bg-app` would have
+ * generated `bg-bg-app`. The values are unchanged and were extracted from the
+ * previous main.css rather than retyped.
+ */
+/* Phosphor icon font.
+ *
+ * MOVED HERE FROM main.css so it survives that file's deletion -- the icons are
+ * referenced from Rust (`ph ph-database` and friends in workflow_stepper.rs), so
+ * losing these imports would blank every icon in the UI with no build error.
+ *
+ * STILL FETCHED FROM unpkg, and that is a finding rather than a decision: this
+ * is a DESKTOP app that currently cannot draw its icons without internet, while
+ * a complete vendored copy sits unused in assets/phosphor/. See the note in
+ * README under "Icons" for the offline options and their cost.
+ */
+@import url("https://unpkg.com/@phosphor-icons/web@2.1.2/src/regular/style.css");
+@import url("https://unpkg.com/@phosphor-icons/web@2.1.2/src/bold/style.css");
+@import url("https://unpkg.com/@phosphor-icons/web@2.1.2/src/fill/style.css");
+
+/* Preflight is BACK. It was disabled while main.css existed, because that
+ * stylesheet was written against browser defaults and the reset restyled every
+ * unconverted component. main.css is gone, so the reset is now what it should
+ * be: the thing that makes utility styling behave the same on every element.
+ *
+ * `@import "tailwindcss"` pulls in preflight -- a reset that zeroes every
+ * margin, strips list markers, sets `border-width: 0` on everything and removes
+ * the native button appearance. The legacy stylesheet was written against
+ * BROWSER DEFAULTS and never compensates for any of that, so importing the
+ * whole bundle restyled every component that has not been converted yet.
+ *
+ * Importing the layers individually gives the design tokens and the utilities
+ * and leaves the reset out. **Re-add preflight when main.css is gone** -- by
+ * then every component expects it, and the reset is what makes utility styling
+ * predictable across elements.
+ */
+/* `legacy` sits BELOW `utilities`, and the order is the whole point.
+ *
+ * main.css was unlayered, and unlayered CSS beats EVERY layered rule regardless
+ * of specificity -- so its `* { margin: 0; padding: 0 }` reset silently
+ * overrode every Tailwind padding and margin utility in the app. Converted
+ * components rendered with the right colours and no spacing at all, which reads
+ * as "Tailwind is half working".
+ *
+ * Naming the layer here and wrapping main.css in it puts utilities above the
+ * reset while still letting legacy rules style everything not yet converted.
+ */
+@import "tailwindcss";
+
+/* Rust files carry the class names, so Tailwind must scan them to know which
+ * utilities to emit. Without this the output is nearly empty and the UI renders
+ * unstyled -- with no error, because an absent utility is just an unknown class.
+ */
+@source "./src/**/*.rs";
+
+/* The DEFAULT palette: Electric Autumn, dark. Also the fallback when no theme
+ * class is set on <body>, which is what the app rendered before the theme
+ * classes were ever applied.
+ */
+@theme {
+  --color-app: #20242B;
+  --color-surface: #262A32;
+  --color-elevated: #2D323A;
+  --color-active: #353A44;
+  --color-edge: #454B75;
+  --color-edge-soft: #30354A;
+  --color-fg: #F3E9D5;
+  --color-fg-soft: #CBB99E;
+  --color-fg-faint: #9C8F79;
+  --color-brand: #D68A62;
+  --color-brand-deep: #BA714C;
+  --color-danger: #E25C5C;
+  --color-danger-deep: #C34242;
+  --color-warn: #E5B55C;
+  --color-warn-deep: #D69542;
+  --color-info: #454B75;
+  --color-accent: #8C3F56;
+
+  /* Terminal type, for the log viewer. Tailwind emits `font-mono` from this. */
+  --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+}
+
+/* ---------------------------------------------------------------------------
+ * Runtime themes.
+ *
+ * Each block re-declares the SAME tokens @theme defined, so every utility
+ * already emitted picks up the new value the moment the body class changes --
+ * no rebuild, no second stylesheet, no duplicated utility classes.
+ *
+ * `.theme-x` is dark and `.theme-x.light` is its light counterpart.
+ * BOTH classes are required for the light variant, which is exactly the bug
+ * that made light mode inert before: the app set `className = "light"` alone,
+ * and no rule in the file matched a bare `.light`.
+ * ------------------------------------------------------------------------- */
+
+.theme-electric-autumn {
+  --color-app: #20242B;
+  --color-surface: #262A32;
+  --color-elevated: #2D323A;
+  --color-active: #353A44;
+  --color-edge: #454B75;
+  --color-edge-soft: #30354A;
+  --color-fg: #F3E9D5;
+  --color-fg-soft: #CBB99E;
+  --color-fg-faint: #9C8F79;
+  --color-brand: #D68A62;
+  --color-brand-deep: #BA714C;
+  --color-danger: #E25C5C;
+  --color-danger-deep: #C34242;
+  --color-warn: #E5B55C;
+  --color-warn-deep: #D69542;
+  --color-info: #454B75;
+  --color-accent: #8C3F56;
+}
+
+.theme-electric-autumn.light {
+  --color-app: #F3E9D5;
+  --color-surface: #E8DECA;
+  --color-elevated: #DED3BF;
+  --color-active: #D1C6B1;
+  --color-edge: #454B75;
+  --color-edge-soft: #A39682;
+  --color-fg: #20242B;
+  --color-fg-soft: #4A505E;
+  --color-fg-faint: #687085;
+  --color-brand: #D68A62;
+  --color-brand-deep: #BA714C;
+  --color-danger: #E25C5C;
+  --color-danger-deep: #C34242;
+  --color-warn: #D69542;
+  --color-warn-deep: #B87522;
+  --color-info: #454B75;
+  --color-accent: #8C3F56;
+}
+
+.theme-warm-editorial {
+  --color-app: #3E4540;
+  --color-surface: #49504B;
+  --color-elevated: #535A55;
+  --color-active: #5E655F;
+  --color-edge: #5E4A42;
+  --color-edge-soft: #4D544F;
+  --color-fg: #F4EFE6;
+  --color-fg-soft: #D8C7B5;
+  --color-fg-faint: #BAA794;
+  --color-brand: #9B6A52;
+  --color-brand-deep: #825540;
+  --color-danger: #C76555;
+  --color-danger-deep: #A64D3F;
+  --color-warn: #D49B55;
+  --color-warn-deep: #B37D3E;
+  --color-info: #6B8A88;
+  --color-accent: #D8C7B5;
+}
+
+.theme-warm-editorial.light {
+  --color-app: #F4EFE6;
+  --color-surface: #EBE5DC;
+  --color-elevated: #DFDACF;
+  --color-active: #D1CDC2;
+  --color-edge: #9B6A52;
+  --color-edge-soft: #C9C4BA;
+  --color-fg: #3E4540;
+  --color-fg-soft: #5E4A42;
+  --color-fg-faint: #7A6A62;
+  --color-brand: #9B6A52;
+  --color-brand-deep: #825540;
+  --color-danger: #C76555;
+  --color-danger-deep: #A64D3F;
+  --color-warn: #D49B55;
+  --color-warn-deep: #B37D3E;
+  --color-info: #6B8A88;
+  --color-accent: #5E4A42;
+}
+
+.theme-seasonless-blue {
+  --color-app: #20282A;
+  --color-surface: #273033;
+  --color-elevated: #2D383C;
+  --color-active: #354247;
+  --color-edge: #385B63;
+  --color-edge-soft: #334045;
+  --color-fg: #EEF0ED;
+  --color-fg-soft: #D9E0DF;
+  --color-fg-faint: #A8B8B5;
+  --color-brand: #B56A50;
+  --color-brand-deep: #9C5840;
+  --color-danger: #D15B5B;
+  --color-danger-deep: #AD4242;
+  --color-warn: #E0B342;
+  --color-warn-deep: #C29524;
+  --color-info: #385B63;
+  --color-accent: #66858A;
+}
+
+.theme-seasonless-blue.light {
+  --color-app: #EEF0ED;
+  --color-surface: #E4E8E5;
+  --color-elevated: #D9E0DF;
+  --color-active: #CED6D5;
+  --color-edge: #385B63;
+  --color-edge-soft: #B8C2C0;
+  --color-fg: #20282A;
+  --color-fg-soft: #3D4B4F;
+  --color-fg-faint: #5B6E73;
+  --color-brand: #B56A50;
+  --color-brand-deep: #9C5840;
+  --color-danger: #D15B5B;
+  --color-danger-deep: #AD4242;
+  --color-warn: #E0B342;
+  --color-warn-deep: #C29524;
+  --color-info: #385B63;
+  --color-accent: #66858A;
+}
+
+.theme-digital-romance {
+  --color-app: #29252B;
+  --color-surface: #342F37;
+  --color-elevated: #3D3841;
+  --color-active: #49434D;
+  --color-edge: #67506B;
+  --color-edge-soft: #413B45;
+  --color-fg: #F3EFE7;
+  --color-fg-soft: #E5DDE5;
+  --color-fg-faint: #C4B7C4;
+  --color-brand: #C76B55;
+  --color-brand-deep: #AA5642;
+  --color-danger: #DE5C5C;
+  --color-danger-deep: #BD4242;
+  --color-warn: #E5B55C;
+  --color-warn-deep: #C99942;
+  --color-info: #67506B;
+  --color-accent: #967D9B;
+}
+
+.theme-digital-romance.light {
+  --color-app: #F3EFE7;
+  --color-surface: #EBE5DB;
+  --color-elevated: #E5DDE5;
+  --color-active: #D8CDD8;
+  --color-edge: #67506B;
+  --color-edge-soft: #C4B9C4;
+  --color-fg: #29252B;
+  --color-fg-soft: #4A434E;
+  --color-fg-faint: #685E6E;
+  --color-brand: #C76B55;
+  --color-brand-deep: #AA5642;
+  --color-danger: #DE5C5C;
+  --color-danger-deep: #BD4242;
+  --color-warn: #E5B55C;
+  --color-warn-deep: #C99942;
+  --color-info: #67506B;
+  --color-accent: #967D9B;
+}
+
+
+/* A bare `.light` with no palette selected. Without this, toggling to light
+ * before choosing a theme changes nothing at all -- the failure that shipped.
+ */
+.light {
+  --color-app: #F3E9D5;
+  --color-surface: #E8DECA;
+  --color-elevated: #DED3BF;
+  --color-active: #D1C6B1;
+  --color-edge: #454B75;
+  --color-edge-soft: #A39682;
+  --color-fg: #20242B;
+  --color-fg-soft: #4A505E;
+  --color-fg-faint: #687085;
+  --color-brand: #D68A62;
+  --color-brand-deep: #BA714C;
+  --color-danger: #E25C5C;
+  --color-danger-deep: #C34242;
+  --color-warn: #D69542;
+  --color-warn-deep: #B87522;
+  --color-info: #454B75;
+  --color-accent: #8C3F56;
+}
+
+/* The app's own base rules -- all that survived main.css.
+ *
+ * `@layer base` rather than a bare rule so preflight and these stay in one
+ * cascade layer and utilities still win over both.
+ */
+@layer base {
+  body {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    background: var(--color-app);
+    color: var(--color-fg);
+    overflow: hidden;
+    height: 100vh;
+  }
+}
