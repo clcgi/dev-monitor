@@ -1,0 +1,24 @@
+[package]
+name = "dev-monitor"
+version = "0.1.0"
+edition = "2021"
+description = "Monitor and test DEV ingestion workflow"
+
+[dependencies]
+dioxus = { version = "0.6", features = ["desktop"] }
+tokio = { version = "1", features = ["full", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dark-light = "1"
+futures-util = "0.3"
+
+# Shrink the debug target dir: keep file:line for readable backtraces, drop the
+# heavier variable/type debug info only a step-debugger needs, and none of us do.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+# Dependencies never get debugged here, so drop their debug info entirely.
+[profile.dev.package."*"]
+debug = false

@@ -1,0 +1,12 @@
+[application]
+name = "dev-monitor"
+default_platform = "desktop"
+
+[desktop]
+title = "DEV Monitor"
+
+[bundle]
+identifier = "com.cdw.devmonitor"
+
+[web.app]
+title = "DEV Monitor"
