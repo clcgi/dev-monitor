@@ -1,0 +1,170 @@
+# Build the desktop bundles and attach them to a GitHub Release.
+#
+# WHY THIS RUNS IN CI AND NOT ON A LAPTOP. The Windows bundle cannot be produced
+# from macOS: Dioxus desktop renders through the platform webview -- WebView2 on
+# Windows, WKWebView on macOS -- so each target needs its own OS to link
+# against. A matrix of two runners is the whole reason this file exists.
+#
+# Triggered by a TAG, never by a push to main. A release is a deliberate act,
+# and tying it to main would mint one on every merge.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  # Manual runs build the bundles WITHOUT publishing, so the packaging can be
+  # checked without spending a version number on it.
+  workflow_dispatch:
+
+permissions:
+  contents: write        # required to create the release and upload assets
+
+jobs:
+  bundle:
+    strategy:
+      # Never cancel the other OS because one failed: knowing that macOS built
+      # and Windows did not is the useful outcome, and fail-fast hides it.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            package: dmg
+            artifact: dev-monitor-macos
+          - os: windows-latest
+            package: nsis
+            artifact: dev-monitor-windows
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Caches the compiled dependencies AND the dioxus-cli install below,
+      # which is the slow half of a cold run.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Install the Dioxus CLI
+        # PINNED EXACTLY, not "^0.6". `dx bundle` and the `dioxus` library are
+        # one contract, and a CLI that floats within a minor can pick up a
+        # bundler change on a rebuild of an unchanged tag -- so the same tag
+        # would stop producing the same artifact. 0.6.3 is the last of the 0.6
+        # line and matches `dioxus = "0.6"` in Cargo.toml.
+        #
+        # NOT --locked: cargo resolves this crate's own dependencies here, and
+        # a missing or stale Cargo.lock in the published crate turns --locked
+        # into a hard failure for a reason that has nothing to do with us.
+        run: cargo install dioxus-cli --version 0.6.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # assets/tailwind.css IS committed -- the app builds with nothing but
+      # Rust, by design. It is rebuilt here anyway so a release can never ship a
+      # stylesheet that disagrees with the markup in the same commit, which is a
+      # difference nothing else would report.
+      - name: Rebuild the stylesheet
+        run: |
+          npm ci
+          npm run build:css
+
+      # `dmg` produces a .dmg, `nsis` produces an .exe -- verified against the
+      # PackageType enum in dioxus-cli 0.6.3. `msi` is the other Windows option
+      # and is deliberately not used: NSIS gives a plain installer executable,
+      # which is what people expect behind a "download for Windows" link.
+      #
+      # --out-dir makes the destination OURS. Without it the bundle lands in a
+      # CLI-version-dependent path (`dist/`, later `target/dx/<name>/bundle/`),
+      # and a wrong guess fails as "no files found" -- which reads as a build
+      # that produced nothing rather than a path that moved.
+      - name: Bundle
+        run: dx bundle --release --platform desktop --package-types ${{ matrix.package }} --out-dir bundle
+
+      # Searched under our own --out-dir first, then the whole tree as a
+      # fallback, because the CLI copies into out-dir but has not always done so
+      # for every package type. Then ASSERTED: a release job that uploads
+      # nothing and still goes green is the failure this whole file exists to
+      # avoid, and an empty Release page is only discovered by a user.
+      - name: Collect the bundles
+        shell: bash
+        run: |
+          mkdir -p out
+          for root in bundle target dist; do
+            [ -d "$root" ] || continue
+            find "$root" -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) \
+              -exec cp -n {} out/ \; 2>/dev/null || true
+          done
+          echo "--- collected ---"; ls -la out
+          if [ -z "$(ls -A out)" ]; then
+            echo "::error::dx bundle produced no ${{ matrix.package }} artifact"
+            echo "--- tree, to find where it went ---"
+            find bundle target dist -maxdepth 6 -type f \
+              \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.app' \) 2>/dev/null | head -40
+            exit 1
+          fi
+
+      # The artifact must be the RIGHT KIND. A macOS job that somehow uploaded
+      # only an .exe would still satisfy "something was produced".
+      - name: Check the expected extension is present
+        shell: bash
+        run: |
+          case "${{ matrix.package }}" in
+            dmg)  ls out/*.dmg >/dev/null 2>&1 || { echo "::error::no .dmg"; exit 1; } ;;
+            nsis) ls out/*.exe >/dev/null 2>&1 || { echo "::error::no .exe"; exit 1; } ;;
+          esac
+          echo "ok: $(ls out)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/*
+
+  publish:
+    # Only a tag publishes. A manual run stops after `bundle`, leaving the
+    # artifacts downloadable from the run page.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            **macOS** — the `.dmg` is **unsigned**, so Gatekeeper refuses it on a
+            double-click with "damaged and can't be opened". That message is
+            wrong; the download is fine. Open it once with:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/dev-monitor.app
+            ```
+
+            **Windows** — SmartScreen shows "unrecognised app" for the same
+            reason. *More info* → *Run anyway*.
+
+            ## It needs the CDW checkout beside it
+
+            This app runs the scripts in `CentralDocumentWarehouse/tools/`. It
+            finds them **relative to its working directory**, so it must be
+            launched from a tree that looks like:
+
+            ```
+            CDW/
+            ├── CentralDocumentWarehouse/
+            └── dev-monitor/
+            ```
+
+            Launched from anywhere else the sidebar reads "No scripts found in
+            tools/". It also needs the Azure CLI on PATH and the repo's Python
+            venv, and it loads its icon font from the network.
