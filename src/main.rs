@@ -12,15 +12,27 @@ mod services;
 /// `input.css`.
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
 
-/// The four palettes, in the order the picker offers them. The strings are the
-/// body classes `input.css` defines; a name here with no matching block there
-/// silently renders the default, so the two lists are one contract.
+/// The four palettes. The strings are the body classes `input.css` defines; a
+/// name here with no matching block there silently renders the default, so the
+/// two lists are one contract.
+///
+/// THE PICKER IS NOT MOUNTED at present -- see `DEFAULT_THEME`. This list and
+/// `components::theme_picker` are kept because the palettes themselves are
+/// still live: removing them would mean deleting four working CSS blocks to
+/// re-add them later, and the last time this app had unreachable palettes it
+/// was because nothing selected one, not because they were gone.
 pub const THEMES: [(&str, &str); 4] = [
     ("theme-electric-autumn", "Electric Autumn"),
     ("theme-warm-editorial", "Warm Editorial"),
     ("theme-seasonless-blue", "Seasonless Blue"),
     ("theme-digital-romance", "Digital Romance"),
 ];
+
+/// The palette the app starts in, and currently the only one it uses.
+///
+/// Must match one of `THEMES`; a string with no matching block in `input.css`
+/// renders the default palette with no error anywhere.
+pub const DEFAULT_THEME: &str = "theme-seasonless-blue";
 
 #[cfg(not(target_arch = "wasm32"))]
 fn window_config(title: &str) -> dioxus::desktop::Config {
@@ -49,11 +61,17 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    let system_light = dark_light::detect() != dark_light::Mode::Dark;
-    let mut is_light = use_signal(|| system_light);
+    let mut system_is_light = use_signal(|| dark_light::detect() != dark_light::Mode::Dark);
+    // None follows the OS; Some(_) is the user's explicit choice.
+    //
+    // THIS HAS TO BE A TRISTATE. The poll below rewrites the mode every two
+    // seconds, so a plain bool would be overwritten within a tick of anyone
+    // choosing light on a dark machine -- the toggle would appear to do
+    // nothing, intermittently, which is the worst way for a control to fail.
+    let mut theme_preference = use_signal(|| Option::<bool>::None);
     // The palette was unreachable before: the CSS defined four, and nothing in
     // the app ever set the class that selects one.
-    let theme = use_signal(|| THEMES[0].0.to_string());
+    let theme = use_signal(|| DEFAULT_THEME.to_string());
     use_context_provider(|| theme);
 
     use_coroutine(move |_rx: UnboundedReceiver<()>| async move {
@@ -62,9 +80,12 @@ fn App() -> Element {
             let detected =
                 tokio::task::spawn_blocking(|| dark_light::detect() != dark_light::Mode::Dark)
                     .await
-                    .unwrap_or(*is_light.read());
-            if detected != *is_light.read() {
-                is_light.set(detected);
+                    .unwrap_or(*system_is_light.read());
+            // Written unconditionally: it records what the OS says, which is
+            // read only when the preference is None. An explicit choice is
+            // never touched here.
+            if detected != *system_is_light.read() {
+                system_is_light.set(detected);
             }
         }
     });
@@ -79,7 +100,8 @@ fn App() -> Element {
     });
 
     let stylesheet: &str = TAILWIND_CSS;
-    let theme_class = if *is_light.read() {
+    let is_light = theme_preference.read().unwrap_or(*system_is_light.read());
+    let theme_class = if is_light {
         format!("{} light", theme.read())
     } else {
         theme.read().clone()
@@ -116,6 +138,9 @@ fn App() -> Element {
             class: "cdw-root {theme_class} h-screen",
             screens::main_window::MainWindow {
                 show_auth_reminder,
+                theme_preference: *theme_preference.read(),
+                system_is_light: *system_is_light.read(),
+                on_theme_change: move |pref| theme_preference.set(pref),
             }
         }
     }

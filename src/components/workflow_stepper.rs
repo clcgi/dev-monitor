@@ -3,6 +3,16 @@ use crate::services::state::WorkflowStep;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct WorkflowStepperProps {
+    /// The stages to draw. `None` when the script declares nothing, and the
+    /// whole chain is drawn -- an empty stepper would assert the script
+    /// touches no stage, which it never claimed.
+    pub steps: Option<Vec<WorkflowStep>>,
+    /// Seconds spent in the CURRENT stage, when one is running.
+    ///
+    /// THE ONLY THING THAT SEPARATES WAITING FROM STUCK. A spinner looks
+    /// identical at 5 seconds and at 500, and the waits here are genuinely
+    /// long -- a KEDA cold start can be ten minutes of total silence.
+    pub step_elapsed_s: Option<u64>,
     pub active_step: Option<WorkflowStep>,
     pub step_history: Vec<WorkflowStep>,
     pub is_running: bool,
@@ -16,7 +26,24 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
     // `complete_up_to`. Two copies would drift the moment a step is inserted,
     // and the drift is silent: the stepper would render one order while the
     // auto-complete walked another.
-    let all_steps = WorkflowStep::LINEAR.to_vec();
+    // Declared stages, in the PIPELINE's order rather than the order they were
+    // listed in. A script that named them out of order would otherwise draw a
+    // chain that runs backwards.
+    let all_steps: Vec<WorkflowStep> = match &props.steps {
+        Some(declared) => WorkflowStep::LINEAR
+            .iter()
+            .filter(|s| declared.contains(s))
+            .cloned()
+            .collect(),
+        None => WorkflowStep::LINEAR.to_vec(),
+    };
+    // A declaration listing only exception zones (flow_6 is close) would leave
+    // this empty, and an empty track renders as a bare box.
+    let all_steps = if all_steps.is_empty() {
+        WorkflowStep::LINEAR.to_vec()
+    } else {
+        all_steps
+    };
 
     let mut current_idx = 0;
     if let Some(active) = &props.active_step {
@@ -79,12 +106,37 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
 
         // ring-4 in the app colour replaces the old `box-shadow: 0 0 0 4px`,
         // which existed to punch the connecting line out from behind the circle.
+        //
+        // MOTION IS PART OF THE STATE, not an ornament laid over it. `animate-pop`
+        // fires when a node first becomes Completed or Active, so the eye is
+        // taken to the stage that just changed; `animate-halo` runs only while a
+        // stage is ACTIVE, which is the one thing a static stepper cannot say --
+        // a coloured ring alone reads the same whether work is in progress or
+        // stopped there.
+        // `land` for Completed and `pop` for the rest is deliberate: a browser
+        // replays an animation only when the animation-NAME changes, so sharing
+        // one keyframe across both would make the Active -> Completed
+        // transition -- the one most worth seeing -- silently not animate.
+        //
+        // `animate-breathe` runs only while a stage is genuinely ACTIVE. It is
+        // the difference between "this node is where we got to" and "this node
+        // is working right now", which no static styling can express.
         let circle = match state {
-            NodeState::Completed => "bg-fg-soft border-fg-soft text-app",
-            NodeState::Active    => "bg-brand border-brand text-app",
-            NodeState::Failed    => "bg-danger border-danger text-app",
-            NodeState::Zone      => "bg-warn border-warn text-app",
+            NodeState::Completed => "bg-fg-soft border-fg-soft text-app animate-land",
+            NodeState::Active if props.is_running =>
+                "bg-brand border-brand text-app animate-breathe shadow-lg shadow-brand/30",
+            NodeState::Active    => "bg-brand border-brand text-app animate-pop",
+            NodeState::Failed    => "bg-danger border-danger text-app animate-pop",
+            NodeState::Zone      => "bg-warn border-warn text-app animate-pop",
             NodeState::Pending   => "bg-surface border-edge text-fg",
+        };
+        // The NEXT stage telegraphs where the run is heading. Half the amplitude
+        // of the active node's breathing and no colour shift, so it never
+        // competes for attention -- it only stops the row ahead reading as dead.
+        let anticipate = if props.is_running && state == NodeState::Pending && idx == current_idx + 1 {
+            " animate-ready"
+        } else {
+            ""
         };
         let label = match state {
             NodeState::Completed => "text-fg",
@@ -100,16 +152,38 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
         rsx! {
             div {
                 class: "relative z-[2] flex w-16 shrink-0 flex-col items-center gap-2 \
-                        transition-transform sm:w-20 lg:w-28 {scale}",
+                        transition-transform duration-300 sm:w-20 lg:w-28 {scale}{anticipate}",
                 div {
-                    class: "flex size-10 items-center justify-center rounded-full border-2 \
-                            ring-4 ring-app transition-colors {circle}",
+                    class: "relative flex size-10 items-center justify-center rounded-full \
+                            border-2 ring-4 ring-app transition-colors duration-300 {circle}",
+                    // The halo is its own element rather than a shadow on the
+                    // node, so the expanding ring is not clipped by the node's
+                    // own `ring-4` and does not repaint the icon underneath.
+                    // `pointer-events-none` because it overlaps its neighbours
+                    // at full expansion.
+                    if state == NodeState::Active && props.is_running {
+                        // TWO rings, the second offset by half the cycle. One
+                        // ring pulses; two read as something radiating
+                        // continuously, and the gap between cycles -- which is
+                        // where a single ring looks stalled -- is filled.
+                        span {
+                            class: "pointer-events-none absolute inset-0 rounded-full animate-halo",
+                        }
+                        span {
+                            class: "pointer-events-none absolute inset-0 rounded-full animate-halo-late",
+                        }
+                    }
                     if state == NodeState::Completed {
                         i { class: "ph-fill ph-check text-xl" }
                     } else if state == NodeState::Failed {
                         i { class: "ph-fill ph-x text-xl" }
-                    } else if state == NodeState::Active {
+                    } else if state == NodeState::Active && props.is_running {
                         i { class: "ph ph-spinner ph-spin text-xl" }
+                    } else if state == NodeState::Active {
+                        // Reached but not running: the run finished, was
+                        // cancelled, or is between processes. A spinner here
+                        // would claim work that is not happening.
+                        i { class: "ph-fill {get_step_icon(step)} text-xl" }
                     } else {
                         i { class: "ph-fill {get_step_icon(step)} text-xl" }
                     }
@@ -118,6 +192,18 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                 // icon still identifies the stage.
                 div { class: "hidden text-center text-[10px] leading-tight sm:block {label}",
                     "{name}"
+                }
+                // HOW LONG THIS STAGE HAS BEEN RUNNING. Shown only on the active
+                // node, and only while running, because it is a live reading and
+                // a frozen one on a finished node would be read as a duration.
+                if is_current && props.is_running {
+                    if let Some(secs) = props.step_elapsed_s {
+                        span {
+                            class: "rounded-full bg-brand/15 px-1.5 py-px font-mono text-[9px] \
+                                    tabular-nums text-brand",
+                            {format_elapsed(secs)}
+                        }
+                    }
                 }
             }
         }
@@ -132,16 +218,58 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                     {render_node(step, idx, if is_zone { false } else { idx == current_idx })}
 
                     if idx < all_steps.len() - 1 {
-                        // -mx-3 tucks the line under the circles so it starts and
-                        // ends behind them rather than at their edges. z-[1] keeps
-                        // it below the nodes.
-                        div {
-                            class: if idx + 1 <= current_idx
+                        {
+                            let done = idx + 1 <= current_idx
                                 || props.step_history.contains(&all_steps[idx + 1])
-                                || props.is_succeeded {
-                                "z-[1] -mx-3 h-0.5 min-w-2 flex-1 bg-fg-soft transition-colors"
+                                || props.is_succeeded;
+                            // THE SEGMENT BEING TRAVELLED. Exactly one connector
+                            // is in flight at a time -- the one leaving the
+                            // active node -- and it carries a band moving in the
+                            // direction of travel. That is what turns the
+                            // stepper from a record of where a run got to into a
+                            // picture of it moving.
+                            let in_flight = props.is_running && !done && idx == current_idx;
+                            // Computed here rather than as an `if/else if` chain
+                            // inside the attribute: rsx can infer a two-branch
+                            // `if/else` on an attribute value but not a three-way
+                            // one, and the error it gives ("type annotations
+                            // needed") points at the whole block rather than at
+                            // the chain.
+                            //
+                            // -mx-3 tucks the line under the circles so it starts
+                            // and ends behind them rather than at their edges.
+                            // z-[1] keeps it below the nodes.
+                            const TRACK: &str = "z-[1] -mx-3 min-w-2 flex-1";
+                            let line = if in_flight {
+                                // Thicker while travelling, so the band has room
+                                // to read as a band. A 2px stripe with a gradient
+                                // on it is indistinguishable from a static line
+                                // at arm's length.
+                                format!(
+                                    "{TRACK} relative h-1 rounded-full animate-flow \
+                                     bg-[length:200%_100%] \
+                                     bg-[linear-gradient(90deg,var(--color-edge)_0%,var(--color-brand)_50%,var(--color-edge)_100%)]"
+                                )
+                            } else if done {
+                                format!("{TRACK} h-0.5 bg-fg-soft transition-all duration-500")
                             } else {
-                                "z-[1] -mx-3 h-0.5 min-w-2 flex-1 bg-edge transition-colors"
+                                format!("{TRACK} h-0.5 bg-edge transition-all duration-500")
+                            };
+                            rsx! {
+                                div { class: "{line}",
+                                    // A DISCRETE OBJECT CROSSING THE GAP. The
+                                    // gradient says "this segment is live"; the
+                                    // dot says "and it is moving, that way".
+                                    // Motion of a thing beats motion of a fill
+                                    // for reading direction at a glance.
+                                    if in_flight {
+                                        span {
+                                            class: "pointer-events-none absolute top-1/2 size-2 \
+                                                    rounded-full bg-brand shadow-md shadow-brand/50 \
+                                                    animate-travel",
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -153,5 +281,17 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                 }
             }
         }
+    }
+}
+
+
+/// `45s`, `2m 05s`. Monospace and zero-padded so the reading does not jitter
+/// horizontally as it counts -- a number that shifts every second is harder to
+/// ignore than one that does not, and this sits under a node the eye returns to.
+fn format_elapsed(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m {:02}s", secs / 60, secs % 60)
     }
 }

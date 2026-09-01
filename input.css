@@ -89,8 +89,109 @@
   --color-info: #454B75;
   --color-accent: #8C3F56;
 
+  /* Motion for the workflow stepper. Declared in `@theme` so Tailwind emits
+   * `animate-*` utilities from them, which keeps the keyframes and the classes
+   * that use them in one place instead of a stylesheet the markup cannot see.
+   *
+   * PURPOSE, not decoration: the stepper's job is to say which stage is running
+   * RIGHT NOW, and a static ring says only which stage was reached last. Motion
+   * is the one channel that distinguishes "working" from "stopped here".
+   */
+  --animate-flow: flow 1.4s linear infinite;
+  --animate-travel: travel 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  --animate-pop: pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
+  --animate-land: land 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+  --animate-halo: halo 1.9s ease-out infinite;
+  --animate-halo-late: halo 1.9s ease-out 0.95s infinite;
+  --animate-breathe: breathe 2.2s ease-in-out infinite;
+  --animate-ready: ready 2.4s ease-in-out infinite;
+
   /* Terminal type, for the log viewer. Tailwind emits `font-mono` from this. */
   --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+
+  /* The connector's travelling band. Sized 200% and slid one half-width, so it
+   * loops seamlessly -- animating `background-position` on a 100% gradient
+   * visibly jumps at the wrap.
+   */
+  @keyframes flow {
+    from { background-position: 0% 0; }
+    to   { background-position: -200% 0; }
+  }
+
+  /* A dot carried along the connector. The band alone is a 2px gradient and
+   * reads as a static stripe at a glance; a discrete object crossing the gap is
+   * unmistakably movement, and it points the direction of travel.
+   */
+  @keyframes travel {
+    0%   { transform: translate(-50%, -50%) scale(0.6); left: 0%;   opacity: 0; }
+    12%  { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+    88%  { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(0.6); left: 100%; opacity: 0; }
+  }
+
+  /* A node arriving. Overshoots slightly, because a linear scale to 1 reads as
+   * a redraw rather than as something happening.
+   *
+   * `land` is DELIBERATELY A SECOND KEYFRAME rather than a reuse of `pop`. A
+   * browser restarts an animation only when the animation-NAME changes, so a
+   * node going Active -> Completed while both states used `pop` would not
+   * replay -- and completion is the transition most worth seeing.
+   */
+  @keyframes pop {
+    0%   { transform: scale(0.82); }
+    60%  { transform: scale(1.06); }
+    100% { transform: scale(1); }
+  }
+
+  @keyframes land {
+    0%   { transform: scale(1.14) rotate(-8deg); }
+    55%  { transform: scale(0.94) rotate(3deg); }
+    100% { transform: scale(1) rotate(0); }
+  }
+
+  /* The active node itself, breathing. Slower than the halo and out of phase
+   * with it, so the two read as one living thing rather than a single blink.
+   */
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.07); }
+  }
+
+  /* The stage that is NEXT. Anticipation, not activity -- half the amplitude of
+   * `breathe` and no colour change, so it never competes with the active node
+   * for attention but does tell the eye where the run is heading.
+   */
+  @keyframes ready {
+    0%, 100% { opacity: 0.45; }
+    50%      { opacity: 0.9; }
+  }
+
+  /* An expanding ring on the ACTIVE node only. Opacity-only so it costs no
+   * layout, and it fades to nothing rather than looping a hard edge.
+   */
+  @keyframes halo {
+    0%   { box-shadow: 0 0 0 0 var(--color-brand); opacity: 0.55; }
+    70%  { box-shadow: 0 0 0 12px var(--color-brand); opacity: 0; }
+    100% { box-shadow: 0 0 0 0 var(--color-brand); opacity: 0; }
+  }
+}
+
+/* RESPECTS THE SYSTEM SETTING. Motion here is informational, so it degrades to
+ * a static state rather than disappearing -- the active node still differs from
+ * the rest by colour and ring, which is what carries the meaning.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-flow,
+  .animate-travel,
+  .animate-pop,
+  .animate-land,
+  .animate-halo,
+  .animate-halo-late,
+  .animate-breathe,
+  .animate-ready,
+  .ph-spin {
+    animation: none !important;
+  }
 }
 
 /* ---------------------------------------------------------------------------

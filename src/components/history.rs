@@ -5,23 +5,54 @@ use chrono::Duration;
 #[derive(Props, Clone, PartialEq)]
 pub struct HistoryPanelProps {
     pub history: Vec<HistoryEntry>,
+    pub open: bool,
+    pub on_close: EventHandler<()>,
 }
 
+/// Execution history, as a slide-over panel.
+///
+/// WHY IT LEFT THE MAIN PAGE. History is a record ACROSS runs, and it was
+/// sitting inside the view of ONE run -- competing for height with the stepper,
+/// the options and the log pane, all of which describe the execution actually
+/// in front of you. On a short window it took space from the logs to show rows
+/// about runs that had already finished.
+///
+/// A panel rather than a route: it is consulted, not navigated to, and it must
+/// not replace the view of a run that is still going.
 #[component]
 pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
+    if !props.open {
+        return rsx! {};
+    }
+
     rsx! {
-        // max-h is responsive: a short window gave the log viewer almost nothing
-        // once history filled its fixed 240px.
-        div { class: "flex max-h-48 flex-col rounded-lg border border-edge bg-surface lg:max-h-60",
+        // The scrim. Click-to-dismiss, because a panel whose only exit is a
+        // small × reads as modal when it is not.
+        div {
+            class: "fixed inset-0 z-40 bg-app/60",
+            onclick: move |_| props.on_close.call(()),
+        }
+        aside {
+            class: "fixed inset-y-0 right-0 z-50 flex w-full max-w-sm flex-col border-l \
+                    border-edge bg-surface shadow-2xl",
             div {
-                class: "border-b border-edge-soft px-4 py-3 text-xs font-semibold uppercase \
-                        tracking-wider text-fg-soft",
-                "Execution History"
+                class: "flex shrink-0 items-center gap-2 border-b border-edge-soft px-4 py-3 \
+                        text-xs font-semibold uppercase tracking-wider text-fg-soft",
+                i { class: "ph ph-clock-counter-clockwise" }
+                span { class: "flex-1", "Execution History" }
+                span { class: "font-normal normal-case tracking-normal text-fg-faint",
+                    "{props.history.len()}" }
+                button {
+                    r#type: "button",
+                    class: "rounded p-1 text-fg-faint hover:bg-active hover:text-fg",
+                    onclick: move |_| props.on_close.call(()),
+                    i { class: "ph ph-x" }
+                }
             }
             if props.history.is_empty() {
                 div { class: "px-4 py-6 text-center text-[11px] text-fg-faint", "No executions yet." }
             } else {
-                div { class: "flex flex-col overflow-y-auto",
+                div { class: "flex min-h-0 flex-1 flex-col overflow-y-auto",
                     for entry in props.history.iter().rev() {
                         {
                             let script_name = entry.script_name.replace("tools/", "");

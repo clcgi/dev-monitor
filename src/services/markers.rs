@@ -37,6 +37,17 @@ pub enum Marker {
     /// ContainerAppJobs and then appears to jump backwards to Apim, which reads
     /// as a fault rather than a second pass.
     Run(String),
+    /// A run reached a VERDICT about itself.
+    ///
+    /// The exit code already carries pass/fail for a whole process, so this
+    /// exists for what the exit code cannot express: `flow_all.py` runs six
+    /// flows and the runner sees ONE code, leaving a single failure among them
+    /// unattributable. The label names which flow the verdict belongs to.
+    ///
+    /// It also arrives WHEN THE VERDICT IS REACHED rather than when the process
+    /// ends, so a suite that is half done shows three results instead of
+    /// nothing.
+    Result { ok: bool, label: String },
 }
 
 /// Fold a marker payload to its comparable form.
@@ -122,6 +133,20 @@ pub fn parse(line: &str) -> Option<Marker> {
     if let Some(raw) = payload(line, "[CDW_RUN:") {
         return Some(Marker::Run(raw.to_string()));
     }
+    if let Some(raw) = payload(line, "[CDW_RESULT:") {
+        // `PASS <label>` / `FAIL <label>`. The verdict word is normalised like
+        // every other payload, so `pass`, `PASS` and `Passed` are one value --
+        // and ANYTHING ELSE IS NOT A VERDICT. Treating an unknown word as a
+        // failure would invent a result no script reported; treating it as a
+        // success would be worse. It falls through to `is_unrecognised`.
+        let (verdict, label) = raw.split_once(char::is_whitespace).unwrap_or((raw, ""));
+        let ok = match normalise(verdict).as_str() {
+            "pass" | "passed" | "ok" | "success" => true,
+            "fail" | "failed" | "error" => false,
+            _ => return None,
+        };
+        return Some(Marker::Result { ok, label: label.trim().to_string() });
+    }
     None
 }
 
@@ -130,7 +155,10 @@ pub fn parse(line: &str) -> Option<Marker> {
 /// Exists so an unrecognised step can be surfaced instead of ignored. A typo in
 /// a script is otherwise indistinguishable from a step that never ran.
 pub fn is_unrecognised(line: &str) -> bool {
-    (line.contains("[CDW_STEP:") || line.contains("[CDW_STEP_DONE:")) && parse(line).is_none()
+    (line.contains("[CDW_STEP:")
+        || line.contains("[CDW_STEP_DONE:")
+        || line.contains("[CDW_RESULT:"))
+        && parse(line).is_none()
 }
 
 #[cfg(test)]
@@ -231,6 +259,56 @@ mod tests {
         assert!(is_unrecognised("[CDW_STEP: Sausages]"));
         assert!(!is_unrecognised("ordinary output"));
         assert!(!is_unrecognised("[CDW_STEP: Raw]"));
+    }
+
+    #[test]
+    fn a_verdict_carries_its_flow_name() {
+        // The label is the whole point: flow_all runs six flows through one
+        // exit code, so a verdict without a name attributes nothing.
+        assert_eq!(
+            parse("[CDW_RESULT: PASS flow_1_park]"),
+            Some(Marker::Result { ok: true, label: "flow_1_park".to_string() })
+        );
+        assert_eq!(
+            parse("[CDW_RESULT: FAIL flow_3_extract]"),
+            Some(Marker::Result { ok: false, label: "flow_3_extract".to_string() })
+        );
+    }
+
+    #[test]
+    fn the_verdict_word_is_case_insensitive_like_every_other_payload() {
+        for raw in ["pass", "PASS", "Passed", "ok", "success"] {
+            assert_eq!(
+                parse(&format!("[CDW_RESULT: {raw} x]")),
+                Some(Marker::Result { ok: true, label: "x".to_string() }),
+                "{raw}"
+            );
+        }
+        for raw in ["fail", "FAILED", "error"] {
+            assert_eq!(
+                parse(&format!("[CDW_RESULT: {raw} x]")),
+                Some(Marker::Result { ok: false, label: "x".to_string() }),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_verdict_word_is_reported_rather_than_guessed() {
+        // Guessing either way invents a result no script reported, and "maybe"
+        // silently recorded as a pass is the worse of the two.
+        assert_eq!(parse("[CDW_RESULT: MAYBE flow_1]"), None);
+        assert!(is_unrecognised("[CDW_RESULT: MAYBE flow_1]"));
+    }
+
+    #[test]
+    fn a_verdict_with_no_label_still_parses() {
+        // A script may report only its own outcome. Losing the verdict because
+        // it carried no name would be worse than an unnamed one.
+        assert_eq!(
+            parse("[CDW_RESULT: PASS]"),
+            Some(Marker::Result { ok: true, label: String::new() })
+        );
     }
 
     #[test]

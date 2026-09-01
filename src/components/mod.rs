@@ -5,3 +5,6 @@ pub mod dashboard;
 pub mod history;
 pub mod workflow_stepper;
 pub mod theme_picker;
+pub mod verdict_panel;
+pub mod arg_picker;
+pub mod theme_toggle;

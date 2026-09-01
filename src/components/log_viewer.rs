@@ -5,20 +5,50 @@ use crate::services::state::{LogMsg, StreamType};
 #[derive(Props, Clone, PartialEq)]
 pub struct LogViewerProps {
     pub logs: Vec<LogMsg>,
+    /// (nonce, line index) to scroll to.
+    ///
+    /// A SIGNAL, not a plain value, and that is load-bearing: `use_effect`
+    /// re-runs when a signal it READS changes, and a copied prop is not a
+    /// signal. Passed by value it would have been read once at mount and the
+    /// jump would never fire again.
+    ///
+    /// The nonce makes a second jump to the SAME line distinct, so clicking one
+    /// verdict twice scrolls twice.
+    pub jump: Signal<Option<(u64, usize)>>,
 }
 
 #[component]
 pub fn LogViewer(props: LogViewerProps) -> Element {
     let mut auto_scroll = use_signal(|| true);
     
+    // FOLLOW THE TAIL. `use_reactive` is what makes this fire on each new line:
+    // an effect re-runs when a SIGNAL it reads changes, and `logs_len` is a
+    // plain prop, not a signal. Written without it -- as this was -- the effect
+    // ran once at mount and then only when `auto_scroll` itself changed, so the
+    // pane silently stopped following output and had to be scrolled by hand.
     let logs_len = props.logs.len();
-    use_effect(move || {
-        let _ = logs_len;
+    use_effect(use_reactive((&logs_len,), move |(_len,)| {
         if *auto_scroll.read() {
             let _ = eval(
                 "let el = document.getElementById('log-viewer-scroll'); if (el) { el.scrollTop = el.scrollHeight; }"
             );
         }
+    }));
+
+    // Jumping to a line.
+    let jump = props.jump;
+    let mut highlighted = use_signal(|| Option::<usize>::None);
+    use_effect(move || {
+        let Some((_nonce, index)) = *jump.read() else { return };
+        // AUTO-SCROLL OFF FIRST. The effect above follows the tail on every new
+        // line, so during a running suite it would drag the view straight back
+        // to the bottom and the jump would look like it did nothing.
+        auto_scroll.set(false);
+        highlighted.set(Some(index));
+        let _ = eval(&format!(
+            "let el = document.getElementById('log-line-{index}'); \
+             if (el) {{ el.scrollIntoView({{block: 'start'}}); }}"
+        ));
     });
 
     rsx! {
@@ -66,7 +96,7 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
                 if props.logs.is_empty() {
                     div { class: "p-2 text-fg-faint", "Waiting for output..." }
                 } else {
-                    for log in props.logs.iter() {
+                    for (idx, log) in props.logs.iter().enumerate() {
                         {
                             // Only the COLOUR varies by stream; the row layout is
                             // shared, so it stays on the element rather than being
@@ -77,9 +107,23 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
                                 StreamType::System => "text-info italic",
                             };
                             let time_str = log.timestamp.format("%H:%M:%S").to_string();
+                            // The marker that says where a jump landed. It stays
+                            // until the next jump: a highlight that faded on a
+                            // timer would be gone by the time someone finished
+                            // reading the line they asked for.
+                            let mark = if *highlighted.read() == Some(idx) {
+                                " -mx-1 rounded bg-brand/15 px-1 ring-1 ring-brand/40"
+                            } else {
+                                ""
+                            };
                             rsx! {
                                 div {
-                                    class: "flex gap-3 break-all py-0.5 {tone}",
+                                    // Addressable, so a jump has something to
+                                    // scroll to. Index-based because the log is
+                                    // append-only within a run: a line's position
+                                    // never changes once written.
+                                    id: "log-line-{idx}",
+                                    class: "flex gap-3 break-all py-0.5 {tone}{mark}",
                                     span { class: "shrink-0 text-fg-faint", "{time_str} " }
                                     span { class: "flex-1 whitespace-pre-wrap", "{log.content}" }
                                 }

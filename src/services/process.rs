@@ -8,7 +8,11 @@ use crate::services::state::{LogMsg, StreamType};
 pub struct ScriptRunner;
 
 impl ScriptRunner {
-    pub fn spawn(script_path: &str, env_str: &str) -> std::io::Result<(Child, UnboundedReceiver<LogMsg>)> {
+    pub fn spawn(
+        script_path: &str,
+        env_str: &str,
+        args: &[String],
+    ) -> std::io::Result<(Child, UnboundedReceiver<LogMsg>)> {
         // Find the absolute path to the workspace root to ensure predictable execution
         let workspace_root = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -20,10 +24,22 @@ impl ScriptRunner {
             workspace_root
         };
 
+        // Args are QUOTED individually. They come from a script's own
+        // declaration rather than free text, but this string is handed to
+        // `bash -c`, and an unquoted value is one shell metacharacter away from
+        // being a second command.
+        let quoted: String = args
+            .iter()
+            .map(|a| format!(" '{}'", a.replace('\'', r"'\''")))
+            .collect();
+
         let command_str = if script_path.ends_with(".py") {
-            format!(".venv/bin/python {}", script_path)
+            // -u so the child does not block-buffer its stdout into the pipe.
+            // Without it a long run shows nothing until it exits, and the live
+            // stepper this app exists for never moves.
+            format!(".venv/bin/python -u {}{}", script_path, quoted)
         } else {
-            format!("bash {}", script_path)
+            format!("bash {}{}", script_path, quoted)
         };
 
         let bash_cmd = format!(
