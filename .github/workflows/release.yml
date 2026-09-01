@@ -55,10 +55,21 @@ jobs:
         # would stop producing the same artifact. 0.6.3 is the last of the 0.6
         # line and matches `dioxus = "0.6"` in Cargo.toml.
         #
-        # NOT --locked: cargo resolves this crate's own dependencies here, and
-        # a missing or stale Cargo.lock in the published crate turns --locked
-        # into a hard failure for a reason that has nothing to do with us.
-        run: cargo install dioxus-cli --version 0.6.3
+        # --locked IS REQUIRED, and leaving it off is not the safe default it
+        # looks like. Without it cargo re-resolves this crate's dependency tree
+        # against TODAY's registry, so a crate published in February 2025 is
+        # built against versions that did not exist then. Observed on both
+        # runners, 2026-09-01:
+        #
+        #   swc_common 5.0.0 -> `pub use serde::__private`
+        #   error[E0432]: no `__private` in the root
+        #
+        # serde removed that module after 1.0.216; dioxus-cli's published
+        # Cargo.lock pins exactly 1.0.216, so --locked builds the tree the
+        # release was tested with. The failure names swc_common and serde and
+        # nothing about resolution, which is why it reads as a broken crate
+        # rather than a missing flag.
+        run: cargo install dioxus-cli --version 0.6.3 --locked
 
       - uses: actions/setup-node@v4
         with:
