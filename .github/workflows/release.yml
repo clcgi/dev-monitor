@@ -137,17 +137,36 @@ jobs:
             shasum -a 256 -c "$DX_SHA"
           fi
 
-          mkdir -p "$HOME/.dx-bin"
+          DX_BIN="$HOME/.dx-bin"
+          mkdir -p "$DX_BIN"
           case "$DX_ASSET" in
-            *.tar.gz) tar xzf "$DX_ASSET" -C "$HOME/.dx-bin" ;;
-            *.zip)    unzip -q "$DX_ASSET" -d "$HOME/.dx-bin" ;;
+            *.tar.gz) tar xzf "$DX_ASSET" -C "$DX_BIN" ;;
+            *.zip)    unzip -q "$DX_ASSET" -d "$DX_BIN" ;;
           esac
-          chmod +x "$HOME/.dx-bin"/dx* || true
-          echo "$HOME/.dx-bin" >> "$GITHUB_PATH"
+          chmod +x "$DX_BIN"/dx* || true
 
-      - name: Check dx runs
-        shell: bash
-        run: dx --help > /dev/null && echo "dx is on PATH"
+          # TRANSLATED TO A NATIVE PATH ON WINDOWS. This step runs in Git Bash,
+          # where $HOME is `/c/Users/runneradmin` -- a POSIX path PowerShell
+          # cannot resolve. Later steps run in pwsh, the default shell on
+          # windows runners, so writing the POSIX form to GITHUB_PATH put an
+          # entry there that only bash could use: `dx` was on PATH for a bash
+          # step and missing for the bundle step, which failed with "The term
+          # 'dx' is not recognized" as though it had never been installed.
+          if command -v cygpath >/dev/null; then
+            DX_BIN="$(cygpath -w "$DX_BIN")"
+          fi
+          echo "adding to PATH: $DX_BIN"
+          echo "$DX_BIN" >> "$GITHUB_PATH"
+
+      # NO `shell:` HERE, DELIBERATELY. This runs in the job's DEFAULT shell --
+      # pwsh on windows runners -- which is the shell the bundle step uses. The
+      # previous version forced bash, so it confirmed `dx` was reachable from a
+      # shell nothing else used and passed while the bundle step could not find
+      # the binary at all. A guard that checks a different environment from the
+      # one it is guarding is worse than no guard: it converts a clear failure
+      # into a confusing one further down.
+      - name: Check dx runs, in the shell the bundle will use
+        run: dx --help
 
       - uses: actions/setup-node@v5
         with:
