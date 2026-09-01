@@ -31,47 +31,78 @@ jobs:
           - os: macos-latest
             package: dmg
             artifact: dev-monitor-macos
+            # macos-latest is Apple silicon.
+            dx_asset: dx-aarch64-apple-darwin-v0.6.3.tar.gz
           - os: windows-latest
             package: nsis
             artifact: dev-monitor-windows
+            dx_asset: dx-x86_64-pc-windows-msvc-v0.6.3.zip
 
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Caches the compiled dependencies AND the dioxus-cli install below,
-      # which is the slow half of a cold run.
+      # Caches the APP's compiled dependencies. It no longer has a CLI install
+      # to cache -- that is a download now -- but `dx bundle --release` still
+      # compiles dioxus, tokio and the rest into the workspace target dir, and
+      # that is the slow half of a cold run.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
 
+      # DOWNLOADED, NOT COMPILED, and that is the whole point of this step.
+      #
+      # `cargo install dioxus-cli` builds the CLI's entire dependency tree on
+      # the runner, and that tree is not ours to fix. Two failures came out of
+      # it on 2026-09-01, neither caused by anything in this repository:
+      #
+      #   swc_common 5.0.0 -> `serde::__private`, removed after serde 1.0.216
+      #   aws-lc-sys 0.23.1 -> "couldn't determine visual studio generator"
+      #
+      # The second is the one that settles the approach: aws-lc-sys needs CMake
+      # with an MSVC generator and NASM, so making it build means installing a C
+      # toolchain on the runner to compile a tool we only ever use as a binary.
+      # Dioxus publishes that binary. Use it.
+      #
+      # The archives hold a single executable at the root -- `dx` / `dx.exe` --
+      # verified against the v0.6.3 assets.
       - name: Install the Dioxus CLI
-        # PINNED EXACTLY, not "^0.6". `dx bundle` and the `dioxus` library are
-        # one contract, and a CLI that floats within a minor can pick up a
-        # bundler change on a rebuild of an unchanged tag -- so the same tag
-        # would stop producing the same artifact. 0.6.3 is the last of the 0.6
-        # line and matches `dioxus = "0.6"` in Cargo.toml.
-        #
-        # --locked IS REQUIRED, and leaving it off is not the safe default it
-        # looks like. Without it cargo re-resolves this crate's dependency tree
-        # against TODAY's registry, so a crate published in February 2025 is
-        # built against versions that did not exist then. Observed on both
-        # runners, 2026-09-01:
-        #
-        #   swc_common 5.0.0 -> `pub use serde::__private`
-        #   error[E0432]: no `__private` in the root
-        #
-        # serde removed that module after 1.0.216; dioxus-cli's published
-        # Cargo.lock pins exactly 1.0.216, so --locked builds the tree the
-        # release was tested with. The failure names swc_common and serde and
-        # nothing about resolution, which is why it reads as a broken crate
-        # rather than a missing flag.
-        run: cargo install dioxus-cli --version 0.6.3 --locked
+        shell: bash
+        env:
+          DX_VERSION: v0.6.3
+          DX_ASSET: ${{ matrix.dx_asset }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/DioxusLabs/dioxus/releases/download/${DX_VERSION}"
+          curl -fsSL -o "$DX_ASSET"        "${base}/${DX_ASSET}"
+          curl -fsSL -o "${DX_ASSET}.sha256" "${base}/${DX_ASSET}.sha256"
 
-      - uses: actions/setup-node@v4
+          # CHECKSUM VERIFIED. This binary is fetched over the network and then
+          # executed, so an unverified download is an unverified executable --
+          # and a truncated one fails later, inside the bundler, as something
+          # that looks like a bundling bug.
+          if command -v sha256sum >/dev/null; then
+            sha256sum -c "${DX_ASSET}.sha256"
+          else
+            shasum -a 256 -c "${DX_ASSET}.sha256"
+          fi
+
+          mkdir -p "$HOME/.dx-bin"
+          case "$DX_ASSET" in
+            *.tar.gz) tar xzf "$DX_ASSET" -C "$HOME/.dx-bin" ;;
+            *.zip)    unzip -q "$DX_ASSET" -d "$HOME/.dx-bin" ;;
+          esac
+          chmod +x "$HOME/.dx-bin"/dx* || true
+          echo "$HOME/.dx-bin" >> "$GITHUB_PATH"
+
+      - name: Check dx runs
+        shell: bash
+        run: dx --help > /dev/null && echo "dx is on PATH"
+
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
 
@@ -130,7 +161,7 @@ jobs:
           esac
           echo "ok: $(ls out)"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact }}
           path: out/*
@@ -142,7 +173,7 @@ jobs:
     needs: bundle
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
 

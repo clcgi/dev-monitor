@@ -7,6 +7,14 @@ title = "DEV Monitor"
 
 [bundle]
 identifier = "com.cdw.devmonitor"
+# REQUIRED BY `dx bundle`, not optional metadata. Without it the bundle step
+# fails with `Bundle publisher was not provided in Dioxus.toml` -- after the
+# whole release build has already run, which is a slow way to learn it.
+#
+# It is shown to whoever installs the app (the Windows installer publisher
+# field, the macOS bundle metadata), so it names the project rather than a legal
+# entity. Change it if this should carry a company name instead.
+publisher = "CDW"
 
 [web.app]
 title = "DEV Monitor"
