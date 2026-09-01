@@ -69,16 +69,45 @@ jobs:
       #
       # The archives hold a single executable at the root -- `dx` / `dx.exe` --
       # verified against the v0.6.3 assets.
+      # DOWNLOADED, NOT COMPILED, and that is the whole point of this step.
+      #
+      # `cargo install dioxus-cli` builds the CLI's entire dependency tree on
+      # the runner, and that tree is not ours to fix. Two failures came out of
+      # it on 2026-09-01, neither caused by anything in this repository:
+      #
+      #   swc_common 5.0.0 -> `serde::__private`, removed after serde 1.0.216
+      #   aws-lc-sys 0.23.1 -> "couldn't determine visual studio generator"
+      #
+      # The second settles the approach: aws-lc-sys needs CMake with an MSVC
+      # generator and NASM, so making it build means installing a C toolchain on
+      # the runner to compile a tool we only ever use as a binary. Dioxus
+      # publishes that binary. It also took 15 minutes on macOS.
+      #
+      # FETCHED WITH `gh`, NOT `curl`. A plain
+      # `curl https://github.com/.../releases/download/...` returned 404 on BOTH
+      # runners on 2026-09-01 while the identical URL served 200 from a
+      # workstation -- so the asset exists and the runner is refused. `gh` is
+      # preinstalled on GitHub-hosted runners and sends the job's token, which
+      # is the difference. It also resolves the asset by name against the
+      # release, so a renamed asset fails as "no such asset" rather than as a
+      # bare 404 that reads like a wrong URL.
+      #
+      # The archives hold a single executable at the root -- `dx` / `dx.exe` --
+      # verified against the v0.6.3 assets.
       - name: Install the Dioxus CLI
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           DX_VERSION: v0.6.3
           DX_ASSET: ${{ matrix.dx_asset }}
         run: |
           set -euo pipefail
-          base="https://github.com/DioxusLabs/dioxus/releases/download/${DX_VERSION}"
-          curl -fsSL -o "$DX_ASSET"        "${base}/${DX_ASSET}"
-          curl -fsSL -o "${DX_ASSET}.sha256" "${base}/${DX_ASSET}.sha256"
+          gh release download "$DX_VERSION" \
+            --repo DioxusLabs/dioxus \
+            --pattern "$DX_ASSET" \
+            --pattern "${DX_ASSET}.sha256" \
+            --clobber
+          ls -la "$DX_ASSET" "${DX_ASSET}.sha256"
 
           # CHECKSUM VERIFIED. This binary is fetched over the network and then
           # executed, so an unverified download is an unverified executable --
