@@ -99,20 +99,9 @@ jobs:
           npm run build:css
 
       # `dmg` produces a .dmg, `nsis` an .exe. Verified against dioxus-cli 0.6.3.
-      # AD-HOC SIGNED ON macOS. Apple Silicon refuses to execute an unsigned
-      # binary that came from the internet, and reports it as "DevMonitor.app is
-      # damaged and can't be opened" -- which reads as a corrupt download and
-      # sends people back to re-download a file that was never the problem.
-      #
-      # `-` is tauri-bundler's pseudo-identity for an ad-hoc signature. It costs
-      # nothing and needs no Apple account. It does NOT notarize: the first
-      # launch still has to be approved once, see the release notes.
-      #
-      # Ignored on Windows, so it stays unconditional rather than adding a
-      # matrix field that exists for one runner.
+      # Signing is configured in Dioxus.toml, NOT here: dx reads bundler settings
+      # from that file and ignores APPLE_SIGNING_IDENTITY entirely.
       - name: Bundle
-        env:
-          APPLE_SIGNING_IDENTITY: "-"
         run: dx bundle --release --platform desktop --package-types ${{ matrix.package }} --out-dir bundle
 
       # One artifact per job. An earlier version also searched `target/`, which on
@@ -158,6 +147,105 @@ jobs:
             exit 1
           fi
           echo "ok: $(ls out)"
+
+      # SIGNING, and the shape of this step is taken from the GitAgent project,
+      # which ships a notarized build of the same kind of app.
+      - name: Sign the macOS bundle
+        if: matrix.package == 'dmg'
+        shell: bash
+        env:
+          SIGNING_IDENTITY:      ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_CERTIFICATE:     ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD:     ${{ secrets.KEYCHAIN_PASSWORD }}
+          APP_STORE_KEY:         ${{ secrets.APP_STORE_CONNECT_KEY }}
+          APP_STORE_KEY_ID:      ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_ISSUER_ID:   ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          dmg="$(ls out/*.dmg)"
+
+          # All four, or none. A half-configured signing setup fails deep inside
+          # codesign or notarytool with a message about the missing piece and
+          # nothing about the configuration.
+          REAL_SIGNING=false
+          if [ -n "${SIGNING_IDENTITY:-}" ] && [ -n "${MACOS_CERTIFICATE:-}" ] \
+             && [ -n "${MACOS_CERTIFICATE_PWD:-}" ] && [ -n "${KEYCHAIN_PASSWORD:-}" ]; then
+            REAL_SIGNING=true
+          fi
+          echo "signing mode: $([ "$REAL_SIGNING" = true ] && echo 'Developer ID' || echo 'ad-hoc')"
+
+          if [ "$REAL_SIGNING" = true ]; then
+            KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+            echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN_PATH" \
+              -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+            security list-keychains -d user -s "$KEYCHAIN_PATH" \
+              $(security list-keychains -d user | tr -d '"')
+            security set-key-partition-list -S apple-tool:,apple:,codesign: \
+              -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            rm "$RUNNER_TEMP/cert.p12"
+          fi
+
+          # The dmg the bundler produced is read-only and compressed, so the app
+          # inside cannot be signed in place. Converting preserves what the
+          # bundler made -- the Applications symlink and the volume icon --
+          # which rebuilding the image by hand would lose.
+          hdiutil convert "$dmg" -format UDRW -o "$RUNNER_TEMP/rw.dmg"
+          hdiutil attach "$RUNNER_TEMP/rw.dmg" -nobrowse -mountpoint "$RUNNER_TEMP/rw"
+          app="$(ls -d "$RUNNER_TEMP"/rw/*.app)"
+
+          # --deep so the nested binaries are covered. --options runtime and
+          # --timestamp ONLY with a real identity: the hardened runtime is what
+          # notarization requires, and a timestamp needs a certificate authority
+          # that an ad-hoc signature does not have.
+          if [ "$REAL_SIGNING" = true ]; then
+            codesign --force --deep --options runtime --timestamp \
+              --entitlements .github/macos-entitlements.plist \
+              --sign "$SIGNING_IDENTITY" "$app"
+          else
+            codesign --force --deep --sign - "$app"
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          hdiutil detach "$RUNNER_TEMP/rw" -quiet
+          rm -f "$dmg"
+          hdiutil convert "$RUNNER_TEMP/rw.dmg" -format UDZO -o "$dmg"
+
+          if [ "$REAL_SIGNING" = true ]; then
+            codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$dmg"
+
+            if [ -n "${APP_STORE_KEY:-}" ] && [ -n "${APP_STORE_KEY_ID:-}" ] \
+               && [ -n "${APP_STORE_ISSUER_ID:-}" ]; then
+              P8="$RUNNER_TEMP/AuthKey_${APP_STORE_KEY_ID}.p8"
+              echo "$APP_STORE_KEY" | base64 --decode > "$P8"
+              # Notarizing the DMG covers the app inside it by hash. Stapling
+              # writes the ticket into the file, so a first launch works offline.
+              xcrun notarytool submit "$dmg" --key "$P8" \
+                --key-id "$APP_STORE_KEY_ID" --issuer "$APP_STORE_ISSUER_ID" --wait
+              xcrun stapler staple "$dmg"
+              xcrun stapler validate "$dmg"
+              rm -f "$P8"
+            else
+              echo "::warning::signed but NOT notarized -- users will see one Gatekeeper prompt"
+            fi
+          fi
+
+          # Re-verified from the FINAL artifact. Signing the app and repacking
+          # the image are two operations, and only the second produces what
+          # ships -- checking the first proves nothing about the file uploaded.
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$RUNNER_TEMP/final"
+          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP"/final/*.app
+          hdiutil detach "$RUNNER_TEMP/final" -quiet
+          echo "verified: $dmg"
+
+      - name: Clean up the signing keychain
+        if: always() && matrix.package == 'dmg'
+        shell: bash
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v5
         with:
