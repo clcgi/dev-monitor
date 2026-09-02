@@ -13,25 +13,21 @@ pub fn VerdictPanel(verdicts: Vec<Verdict>, on_jump: EventHandler<String>) -> El
     let total = verdicts.len();
 
     rsx! {
-        div { class: "overflow-hidden rounded-md border border-edge bg-surface",
+        div { class: "overflow-hidden rounded-2xl border border-border-soft bg-card shadow-sm mt-2",
             div {
-                class: "flex items-center justify-between bg-elevated px-3 py-2 text-[10px] \
-                        uppercase tracking-wider text-fg-faint",
+                class: "flex items-center justify-between border-b border-border-soft bg-black/5 dark:bg-white/5 px-4 py-3 text-caption-strong text-fg-muted",
                 span { "Results" }
-                // The tally is stated rather than left to be counted: "5 of 6" is the number.
                 span {
-                    class: if passed == total { "text-brand" } else { "text-danger" },
+                    class: if passed == total { "text-accent" } else { "text-danger" },
                     "{passed} of {total} passed"
                 }
             }
-            ul { class: "divide-y divide-edge",
+            ul { class: "divide-y divide-border-soft",
                 for verdict in verdicts.iter() {
-                    // A BUTTON, not a list item with a click handler: this is the fastest route.
                     li { key: "{verdict.label}",
                     button {
                         r#type: "button",
-                        class: "flex w-full items-center gap-2 px-3 py-2 text-left text-xs \
-                                hover:bg-active",
+                        class: "flex w-full items-center gap-3 px-4 py-3 text-left text-body hover:bg-black/5 dark:hover:bg-white/5 transition-colors",
                         title: if verdict.label.is_empty() {
                             "No run label to jump to"
                         } else {
@@ -44,20 +40,17 @@ pub fn VerdictPanel(verdicts: Vec<Verdict>, on_jump: EventHandler<String>) -> El
                         },
                         i {
                             class: if verdict.ok {
-                                "ph ph-check-circle text-brand"
+                                "ph-fill ph-check-circle text-accent text-lg"
                             } else {
-                                "ph ph-x-circle text-danger"
+                                "ph-fill ph-x-circle text-danger text-lg"
                             },
                         }
-                        // The label, not the verdict word, is what identifies the row -- the icon.
                         span {
-                            class: if verdict.ok { "text-fg-soft" } else { "text-danger" },
-                            // An unlabelled verdict still shows; losing it would be worse than no name.
+                            class: if verdict.ok { "text-fg" } else { "text-danger font-medium" },
                             if verdict.label.is_empty() { "(unnamed run)" } else { "{verdict.label}" }
                         }
-                        // The affordance.
                         if !verdict.label.is_empty() {
-                            i { class: "ml-auto ph ph-arrow-line-down text-fg-faint opacity-60" }
+                            i { class: "ml-auto ph ph-caret-right text-fg-faint" }
                         }
                     }
                     }

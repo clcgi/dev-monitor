@@ -22,9 +22,7 @@ pub fn ThemeToggle(props: ThemeToggleProps) -> Element {
             r#type: "button",
             // The tooltip carries BOTH the current state and what a click does.
             title: if is_light { "Light — click for dark" } else { "Dark — click for light" },
-            class: "flex items-center gap-2 rounded-md border border-edge bg-elevated px-2.5 \
-                    py-1.5 text-fg-soft transition-colors hover:bg-active hover:text-fg \
-                    focus:outline-none",
+            class: "flex items-center gap-2 rounded-full border border-white/20 bg-black/40 px-3 py-1.5 text-white/80 transition-colors hover:bg-black/60 hover:text-white focus:outline-none",
             onclick: move |_| props.on_change.call(Some(!is_light)),
             i { class: "ph {icon} text-base" }
             span { class: "hidden text-xs sm:inline", "{label}" }

@@ -90,13 +90,13 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
 
         // ring-4 in the app colour punches the connecting line out from behind.
         let circle = match state {
-            NodeState::Completed => "bg-fg-soft border-fg-soft text-app animate-land",
+            NodeState::Completed => "bg-fg-muted border-fg-muted text-card animate-land",
             NodeState::Active if props.is_running =>
-                "bg-brand border-brand text-app animate-breathe shadow-lg shadow-brand/30",
-            NodeState::Active    => "bg-brand border-brand text-app animate-pop",
-            NodeState::Failed    => "bg-danger border-danger text-app animate-pop",
-            NodeState::Zone      => "bg-warn border-warn text-app animate-pop",
-            NodeState::Pending   => "bg-surface border-edge text-fg",
+                "bg-accent border-accent text-card animate-breathe shadow-lg shadow-accent/30",
+            NodeState::Active    => "bg-accent border-accent text-card animate-pop",
+            NodeState::Failed    => "bg-danger border-danger text-card animate-pop",
+            NodeState::Zone      => "bg-warn border-warn text-card animate-pop",
+            NodeState::Pending   => "bg-transparent border-border-soft text-fg-muted",
         };
         // The NEXT stage telegraphs where the run is heading.
         let anticipate = if props.is_running && state == NodeState::Pending && idx == current_idx + 1 {
@@ -106,7 +106,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
         };
         let label = match state {
             NodeState::Completed => "text-fg",
-            NodeState::Active    => "text-brand font-semibold",
+            NodeState::Active    => "text-accent font-semibold",
             NodeState::Failed    => "text-danger",
             NodeState::Zone      => "text-warn",
             NodeState::Pending   => "text-fg-faint",
@@ -120,7 +120,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                         transition-transform duration-300 sm:w-20 lg:w-28 {scale}{anticipate}",
                 div {
                     class: "relative flex size-10 items-center justify-center rounded-full \
-                            border-2 ring-4 ring-app transition-colors duration-300 {circle}",
+                            border-2 ring-4 ring-card transition-colors duration-300 {circle}",
                     // Its own element, so the ring is not clipped by the node's own ring-4.
                     if state == NodeState::Active && props.is_running {
                         // TWO rings, the second offset by half the cycle.
@@ -152,8 +152,8 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                 if is_current && props.is_running {
                     if let Some(secs) = props.step_elapsed_s {
                         span {
-                            class: "rounded-full bg-brand/15 px-1.5 py-px font-mono text-[9px] \
-                                    tabular-nums text-brand",
+                            class: "rounded-full bg-accent/15 px-1.5 py-px font-mono text-[9px] \
+                                    tabular-nums text-accent",
                             {format_elapsed(secs)}
                         }
                     }
@@ -165,7 +165,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
     rsx! {
         div {
             class: "relative mb-5 flex items-center justify-center overflow-x-auto rounded-lg \
-                    border border-edge bg-surface px-4 py-6 sm:px-5 sm:py-8",
+                    border border-border-soft bg-card shadow-sm rounded-2xl px-4 py-6 sm:px-5 sm:py-8",
             div { class: "flex min-w-full w-max items-center justify-center px-4",
                 for (idx, step) in all_steps.iter().enumerate() {
                     {render_node(step, idx, if is_zone { false } else { idx == current_idx })}
@@ -184,12 +184,12 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                                 format!(
                                     "{TRACK} relative h-1 rounded-full animate-flow \
                                      bg-[length:200%_100%] \
-                                     bg-[linear-gradient(90deg,var(--color-edge)_0%,var(--color-brand)_50%,var(--color-edge)_100%)]"
+                                     bg-[linear-gradient(90deg,var(--color-border-soft)_0%,var(--color-accent)_50%,var(--color-border-soft)_100%)]"
                                 )
                             } else if done {
-                                format!("{TRACK} h-0.5 bg-fg-soft transition-all duration-500")
+                                format!("{TRACK} h-0.5 bg-fg-muted transition-all duration-500")
                             } else {
-                                format!("{TRACK} h-0.5 bg-edge transition-all duration-500")
+                                format!("{TRACK} h-0.5 bg-border-soft transition-all duration-500")
                             };
                             rsx! {
                                 div { class: "{line}",
@@ -197,7 +197,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                                     if in_flight {
                                         span {
                                             class: "pointer-events-none absolute top-1/2 size-2 \
-                                                    rounded-full bg-brand shadow-md shadow-brand/50 \
+                                                    rounded-full bg-accent shadow-md shadow-accent/50 \
                                                     animate-travel",
                                         }
                                     }

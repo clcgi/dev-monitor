@@ -80,37 +80,33 @@ pub fn Sidebar(props: SidebarProps) -> Element {
         .collect();
 
     rsx! {
-        // RESPONSIVE: the fixed 260px inline width is gone.
+        // Sidebar is bg-sidebar (Tile-2 in dark, Canvas in light). Edge-to-edge border is softer.
         aside {
-            class: "flex w-14 shrink-0 flex-col border-r border-edge bg-surface \
-                    md:w-56 lg:w-64",
+            class: "flex w-14 shrink-0 flex-col border-r border-border-soft bg-sidebar                     md:w-56 lg:w-64",
 
-            div { class: "flex items-center justify-between px-3 pb-1 pt-3",
+            div { class: "flex items-center justify-between px-4 pb-2 pt-4",
                 div {
-                    class: "hidden text-[10px] uppercase tracking-wider text-fg-faint md:block",
-                    "DEV Scripts"
+                    class: "hidden text-caption-strong text-fg-muted md:block",
+                    "Scripts"
                 }
                 i { class: "ph ph-list text-fg-faint md:hidden" }
             }
 
-            // The language filter.
-            div { class: "flex gap-1 px-2 pb-2 pt-1",
+            // Language filter styled as Apple configurator chips
+            div { class: "flex gap-2 px-3 pb-3 pt-2",
                 for (value, label, icon) in [
                     (Language::All, "All", "ph-list-dashes"),
-                    (Language::Python, "Python", "ph-file-py"),
-                    (Language::Shell, "Shell", "ph-terminal-window"),
+                    (Language::Python, "Py", "ph-file-py"),
+                    (Language::Shell, "Sh", "ph-terminal-window"),
                 ] {
                     button {
                         key: "{label}",
                         r#type: "button",
                         title: "{label}",
                         class: if lang == value {
-                            "flex flex-1 items-center justify-center gap-1 rounded-md border \
-                             border-brand bg-brand/15 px-1.5 py-1 text-[10px] text-brand"
+                            "flex flex-1 items-center justify-center gap-1.5 rounded-full border                              border-accent bg-accent text-button-utility text-white transition-all scale-100"
                         } else {
-                            "flex flex-1 items-center justify-center gap-1 rounded-md border \
-                             border-transparent px-1.5 py-1 text-[10px] text-fg-faint \
-                             hover:bg-elevated hover:text-fg-soft"
+                            "flex flex-1 items-center justify-center gap-1.5 rounded-full border                              border-border-soft bg-transparent text-button-utility text-fg-muted                              hover:bg-black/5 dark:hover:bg-white/5 transition-colors scale-100 active:scale-95"
                         },
                         onclick: move |_| language.set(value),
                         i { class: "ph {icon}" }
@@ -119,11 +115,10 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 }
             }
 
-            div { class: "min-h-0 flex-1 overflow-y-auto p-1.5",
+            div { class: "min-h-0 flex-1 overflow-y-auto px-2 py-2",
                 if visible.is_empty() {
                     div {
-                        class: "hidden px-3 py-5 text-[11px] leading-relaxed text-fg-faint md:block",
-                        // The two empties are different and say so: nothing found at all is a setup.
+                        class: "hidden px-4 py-5 text-body text-fg-faint md:block",
                         if groups.read().is_empty() {
                             "No scripts found in tools/"
                         } else {
@@ -136,12 +131,9 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                         let is_collapsed = collapsed.read().contains(&category);
                         let key = category.clone();
                         rsx! {
-                        div { key: "{category}", class: "mb-2",
-                            // The group heading.
+                        div { key: "{category}", class: "mb-4",
                             div {
-                                class: "hidden w-full cursor-pointer items-center gap-1.5 rounded \
-                                        px-2 pb-1 pt-2 text-[10px] uppercase tracking-wider \
-                                        text-fg-faint hover:text-fg-soft md:flex",
+                                class: "hidden w-full cursor-pointer items-center gap-2 rounded-md                                         px-2 pb-1.5 pt-2 text-caption-strong text-fg-muted                                         hover:text-fg hover:bg-hover md:flex transition-colors",
                                 onclick: {
                                     let key = key.clone();
                                     move |_| {
@@ -149,19 +141,15 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                         if !set.remove(&key) { set.insert(key.clone()); }
                                     }
                                 },
-                                // The caret points at what a click does: right when closed, down when open.
                                 i {
                                     class: if is_collapsed { "ph ph-caret-right" } else { "ph ph-caret-down" },
                                 }
                                 i { class: "ph {category_icon(&category)}" }
                                 span { "{category}" }
-                                // The count stays visible when collapsed -- it is the only thing left saying.
-                                span { class: "ml-auto opacity-60", "{list.len()}" }
+                                span { class: "ml-auto text-fg-faint text-xs", "{list.len()}" }
                             }
-                            // At rail width the heading is a divider and an icon, and it collapses too.
                             div {
-                                class: "mx-2 mb-1 mt-2 flex cursor-pointer justify-center \
-                                        border-t border-edge pt-2 text-fg-faint md:hidden",
+                                class: "mx-2 mb-2 mt-3 flex cursor-pointer justify-center                                         border-t border-border-soft pt-2 text-fg-muted md:hidden",
                                 onclick: {
                                     let key = key.clone();
                                     move |_| {
@@ -173,55 +161,46 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                             }
 
                             if !is_collapsed {
-
-                            for meta in list {
-                                div {
-                                    key: "{meta.path}",
-                                    // border-l-2 on BOTH states, transparent when off, so selecting a row does.
-                                    class: if Some(&meta.path) == props.selected_script.as_ref() {
-                                        "flex cursor-pointer items-center gap-2 rounded-md border-l-2 \
-                                         border-brand bg-elevated px-2 py-2 justify-center md:justify-start"
-                                    } else {
-                                        "flex cursor-pointer items-center gap-2 rounded-md border-l-2 \
-                                         border-transparent px-2 py-2 hover:bg-elevated justify-center \
-                                         md:justify-start"
-                                    },
-                                    // The summary in the tooltip: the row is too narrow for it and the file name.
-                                    title: if meta.summary.is_empty() {
-                                        "{meta.path}"
-                                    } else {
-                                        "{meta.path} -- {meta.summary}"
-                                    },
-                                    onclick: {
-                                        let m = meta.clone();
-                                        move |_| props.on_select.call(m.clone())
-                                    },
-
-                                    // The language glyph gives way to a spinner while this script runs.
-                                    if props.running_script.as_ref() == Some(&meta.path) {
-                                        i { class: "ph ph-spinner ph-spin shrink-0 text-brand" }
-                                    } else {
-                                        span { class: "shrink-0 leading-none",
-                                            if meta.path.ends_with(".py") { "🐍" } else { "🐚" }
-                                        }
-                                    }
-                                    span {
-                                        class: if props.running_script.as_ref() == Some(&meta.path) {
-                                            "hidden min-w-0 truncate text-xs text-brand md:block"
+                                for meta in list {
+                                    div {
+                                        key: "{meta.path}",
+                                        class: if Some(&meta.path) == props.selected_script.as_ref() {
+                                            "group flex cursor-pointer items-center gap-2 rounded-lg                                              bg-accent/10 px-3 py-1.5 justify-center md:justify-start                                              mb-0.5 text-accent"
                                         } else {
-                                            "hidden min-w-0 truncate text-xs text-fg-soft md:block"
+                                            "group flex cursor-pointer items-center gap-2 rounded-lg                                              bg-transparent px-3 py-1.5 hover:bg-black/5 dark:hover:bg-white/5                                              justify-center md:justify-start mb-0.5 text-fg"
                                         },
-                                        "{meta.file_name()}"
-                                    }
-                                    // A live dot at the trailing edge, visible even past the label.
-                                    if props.running_script.as_ref() == Some(&meta.path) {
+                                        title: if meta.summary.is_empty() {
+                                            "{meta.path}"
+                                        } else {
+                                            "{meta.path} -- {meta.summary}"
+                                        },
+                                        onclick: {
+                                            let m = meta.clone();
+                                            move |_| props.on_select.call(m.clone())
+                                        },
+
+                                        if props.running_script.as_ref() == Some(&meta.path) {
+                                            i { class: "ph ph-spinner ph-spin shrink-0 text-accent" }
+                                        } else {
+                                            span { class: "shrink-0 leading-none opacity-80",
+                                                if meta.path.ends_with(".py") { "🐍" } else { "🐚" }
+                                            }
+                                        }
                                         span {
-                                            class: "ml-auto hidden size-1.5 shrink-0 animate-pulse \
-                                                    rounded-full bg-brand md:block",
+                                            class: if props.running_script.as_ref() == Some(&meta.path) {
+                                                "hidden min-w-0 truncate text-body-strong md:block"
+                                            } else {
+                                                "hidden min-w-0 truncate text-body md:block"
+                                            },
+                                            "{meta.file_name()}"
+                                        }
+                                        if props.running_script.as_ref() == Some(&meta.path) {
+                                            span {
+                                                class: "ml-auto hidden size-2 shrink-0 animate-pulse                                                         rounded-full bg-accent md:block",
+                                            }
                                         }
                                     }
                                 }
-                            }
                             }
                         }
                         }

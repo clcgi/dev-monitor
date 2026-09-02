@@ -15,12 +15,10 @@ pub fn EnvironmentSelector(props: EnvSelectorProps) -> Element {
         div { class: "mb-4 flex flex-wrap gap-1.5",
             for env in envs.into_iter() {
                 button {
-                        class: if Some(env) == props.selected {
-                        "rounded-full border border-brand bg-elevated px-3 py-1 font-mono \
-                         text-[11px] text-fg"
+                    class: if Some(env) == props.selected {
+                        "flex items-center gap-2 rounded-full border border-accent bg-accent px-4 py-2 text-button-utility text-white shadow-sm transition-colors"
                     } else {
-                        "rounded-full border border-edge-soft bg-elevated px-3 py-1 font-mono \
-                         text-[11px] text-fg-soft hover:border-brand hover:text-fg"
+                        "flex items-center gap-2 rounded-full border border-border-hard bg-transparent px-4 py-2 text-button-utility text-fg-muted hover:border-fg hover:text-fg transition-colors"
                     },
                     onclick: move |_| props.on_select.call(env),
                     "{env}"

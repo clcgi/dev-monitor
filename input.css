@@ -4,287 +4,220 @@
 @import url("https://unpkg.com/@phosphor-icons/web@2.1.2/src/bold/style.css");
 @import url("https://unpkg.com/@phosphor-icons/web@2.1.2/src/fill/style.css");
 
-/* Preflight is BACK. It was disabled while main.css existed, because that. */
-/* `legacy` sits BELOW `utilities`, and the order is the whole point. */
 @import "tailwindcss";
 
-/* Rust files carry the class names, so Tailwind must scan them to know. */
 @source "./src/**/*.rs";
 
-/* The DEFAULT palette: Electric Autumn, dark. */
 @theme {
-  --color-app: #20242B;
-  --color-surface: #262A32;
-  --color-elevated: #2D323A;
-  --color-active: #353A44;
-  --color-edge: #454B75;
-  --color-edge-soft: #30354A;
-  --color-fg: #F3E9D5;
-  --color-fg-soft: #CBB99E;
-  --color-fg-faint: #9C8F79;
-  --color-brand: #D68A62;
-  --color-brand-deep: #BA714C;
-  --color-danger: #E25C5C;
-  --color-danger-deep: #C34242;
-  --color-warn: #E5B55C;
-  --color-warn-deep: #D69542;
-  --color-info: #454B75;
-  --color-accent: #8C3F56;
+  --color-primary: #0066cc;
+  --color-primary-focus: #0071e3;
+  --color-primary-on-dark: #2997ff;
+  
+  --color-ink: #1d1d1f;
+  --color-ink-muted-80: #333333;
+  --color-ink-muted-48: #7a7a7a;
+  --color-body-on-dark: #ffffff;
+  --color-body-muted: #cccccc;
+  
+  --color-canvas: #ffffff;
+  --color-parchment: #f5f5f7;
+  --color-pearl: #fafafc;
+  
+  --color-tile-1: #272729;
+  --color-tile-2: #2a2a2c;
+  --color-tile-3: #252527;
+  --color-pure-black: #000000;
+  
+  /* Semantic state colors mapping to Apple's subdued tones if possible, else standard */
+  --color-danger: #e25c5c;
+  --color-warn: #d69542;
+  
+  --font-display: 'SF Pro Display', system-ui, -apple-system, sans-serif;
+  --font-text: 'SF Pro Text', system-ui, -apple-system, sans-serif;
+  --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
 
+  /* Keep legacy animations for Stepper if desired, though we'll tone them down */
   --animate-flow: flow 1.4s linear infinite;
   --animate-travel: travel 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   --animate-pop: pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
   --animate-land: land 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
   --animate-halo: halo 1.9s ease-out infinite;
-  --animate-halo-late: halo 1.9s ease-out 0.95s infinite;
   --animate-breathe: breathe 2.2s ease-in-out infinite;
-  --animate-ready: ready 2.4s ease-in-out infinite;
-
-  --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
 
   @keyframes flow {
     from { background-position: 0% 0; }
     to   { background-position: -200% 0; }
   }
-
   @keyframes travel {
     0%   { transform: translate(-50%, -50%) scale(0.6); left: 0%;   opacity: 0; }
     12%  { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
     88%  { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
     100% { transform: translate(-50%, -50%) scale(0.6); left: 100%; opacity: 0; }
   }
-
   @keyframes pop {
     0%   { transform: scale(0.82); }
     60%  { transform: scale(1.06); }
     100% { transform: scale(1); }
   }
-
   @keyframes land {
     0%   { transform: scale(1.14) rotate(-8deg); }
     55%  { transform: scale(0.94) rotate(3deg); }
     100% { transform: scale(1) rotate(0); }
   }
-
   @keyframes breathe {
     0%, 100% { transform: scale(1); }
     50%      { transform: scale(1.07); }
   }
-
-  @keyframes ready {
-    0%, 100% { opacity: 0.45; }
-    50%      { opacity: 0.9; }
-  }
-
   @keyframes halo {
-    0%   { box-shadow: 0 0 0 0 var(--color-brand); opacity: 0.55; }
-    70%  { box-shadow: 0 0 0 12px var(--color-brand); opacity: 0; }
-    100% { box-shadow: 0 0 0 0 var(--color-brand); opacity: 0; }
+    0%   { box-shadow: 0 0 0 0 var(--color-primary); opacity: 0.55; }
+    70%  { box-shadow: 0 0 0 12px var(--color-primary); opacity: 0; }
+    100% { box-shadow: 0 0 0 0 var(--color-primary); opacity: 0; }
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-flow,
-  .animate-travel,
-  .animate-pop,
-  .animate-land,
-  .animate-halo,
-  .animate-halo-late,
-  .animate-breathe,
-  .animate-ready,
-  .ph-spin {
+  .animate-flow, .animate-travel, .animate-pop, .animate-land, .animate-halo, .animate-breathe, .ph-spin {
     animation: none !important;
   }
 }
 
-.theme-electric-autumn {
-  --color-app: #20242B;
-  --color-surface: #262A32;
-  --color-elevated: #2D323A;
-  --color-active: #353A44;
-  --color-edge: #454B75;
-  --color-edge-soft: #30354A;
-  --color-fg: #F3E9D5;
-  --color-fg-soft: #CBB99E;
-  --color-fg-faint: #9C8F79;
-  --color-brand: #D68A62;
-  --color-brand-deep: #BA714C;
-  --color-danger: #E25C5C;
-  --color-danger-deep: #C34242;
-  --color-warn: #E5B55C;
-  --color-warn-deep: #D69542;
-  --color-info: #454B75;
-  --color-accent: #8C3F56;
+/* Default Dark Mode Mapping */
+:root {
+  --bg-app: var(--color-tile-1);
+  --bg-sidebar: var(--color-tile-2);
+  --bg-card: var(--color-tile-3);
+  --bg-nav: var(--color-pure-black);
+  
+  --text-main: var(--color-body-on-dark);
+  --text-muted: var(--color-body-muted);
+  --text-faint: var(--color-ink-muted-48);
+  
+  --border-soft: rgba(255, 255, 255, 0.08);
+  --border-hard: rgba(255, 255, 255, 0.15);
+  
+  --accent-color: var(--color-primary-on-dark);
+  --hover-bg: rgba(255, 255, 255, 0.05);
 }
 
-.theme-electric-autumn.light {
-  --color-app: #F3E9D5;
-  --color-surface: #E8DECA;
-  --color-elevated: #DED3BF;
-  --color-active: #D1C6B1;
-  --color-edge: #454B75;
-  --color-edge-soft: #A39682;
-  --color-fg: #20242B;
-  --color-fg-soft: #4A505E;
-  --color-fg-faint: #687085;
-  --color-brand: #D68A62;
-  --color-brand-deep: #BA714C;
-  --color-danger: #E25C5C;
-  --color-danger-deep: #C34242;
-  --color-warn: #D69542;
-  --color-warn-deep: #B87522;
-  --color-info: #454B75;
-  --color-accent: #8C3F56;
-}
-
-.theme-warm-editorial {
-  --color-app: #3E4540;
-  --color-surface: #49504B;
-  --color-elevated: #535A55;
-  --color-active: #5E655F;
-  --color-edge: #5E4A42;
-  --color-edge-soft: #4D544F;
-  --color-fg: #F4EFE6;
-  --color-fg-soft: #D8C7B5;
-  --color-fg-faint: #BAA794;
-  --color-brand: #9B6A52;
-  --color-brand-deep: #825540;
-  --color-danger: #C76555;
-  --color-danger-deep: #A64D3F;
-  --color-warn: #D49B55;
-  --color-warn-deep: #B37D3E;
-  --color-info: #6B8A88;
-  --color-accent: #D8C7B5;
-}
-
-.theme-warm-editorial.light {
-  --color-app: #F4EFE6;
-  --color-surface: #EBE5DC;
-  --color-elevated: #DFDACF;
-  --color-active: #D1CDC2;
-  --color-edge: #9B6A52;
-  --color-edge-soft: #C9C4BA;
-  --color-fg: #3E4540;
-  --color-fg-soft: #5E4A42;
-  --color-fg-faint: #7A6A62;
-  --color-brand: #9B6A52;
-  --color-brand-deep: #825540;
-  --color-danger: #C76555;
-  --color-danger-deep: #A64D3F;
-  --color-warn: #D49B55;
-  --color-warn-deep: #B37D3E;
-  --color-info: #6B8A88;
-  --color-accent: #5E4A42;
-}
-
-.theme-seasonless-blue {
-  --color-app: #20282A;
-  --color-surface: #273033;
-  --color-elevated: #2D383C;
-  --color-active: #354247;
-  --color-edge: #385B63;
-  --color-edge-soft: #334045;
-  --color-fg: #EEF0ED;
-  --color-fg-soft: #D9E0DF;
-  --color-fg-faint: #A8B8B5;
-  --color-brand: #B56A50;
-  --color-brand-deep: #9C5840;
-  --color-danger: #D15B5B;
-  --color-danger-deep: #AD4242;
-  --color-warn: #E0B342;
-  --color-warn-deep: #C29524;
-  --color-info: #385B63;
-  --color-accent: #66858A;
-}
-
-.theme-seasonless-blue.light {
-  --color-app: #EEF0ED;
-  --color-surface: #E4E8E5;
-  --color-elevated: #D9E0DF;
-  --color-active: #CED6D5;
-  --color-edge: #385B63;
-  --color-edge-soft: #B8C2C0;
-  --color-fg: #20282A;
-  --color-fg-soft: #3D4B4F;
-  --color-fg-faint: #5B6E73;
-  --color-brand: #B56A50;
-  --color-brand-deep: #9C5840;
-  --color-danger: #D15B5B;
-  --color-danger-deep: #AD4242;
-  --color-warn: #E0B342;
-  --color-warn-deep: #C29524;
-  --color-info: #385B63;
-  --color-accent: #66858A;
-}
-
-.theme-digital-romance {
-  --color-app: #29252B;
-  --color-surface: #342F37;
-  --color-elevated: #3D3841;
-  --color-active: #49434D;
-  --color-edge: #67506B;
-  --color-edge-soft: #413B45;
-  --color-fg: #F3EFE7;
-  --color-fg-soft: #E5DDE5;
-  --color-fg-faint: #C4B7C4;
-  --color-brand: #C76B55;
-  --color-brand-deep: #AA5642;
-  --color-danger: #DE5C5C;
-  --color-danger-deep: #BD4242;
-  --color-warn: #E5B55C;
-  --color-warn-deep: #C99942;
-  --color-info: #67506B;
-  --color-accent: #967D9B;
-}
-
-.theme-digital-romance.light {
-  --color-app: #F3EFE7;
-  --color-surface: #EBE5DB;
-  --color-elevated: #E5DDE5;
-  --color-active: #D8CDD8;
-  --color-edge: #67506B;
-  --color-edge-soft: #C4B9C4;
-  --color-fg: #29252B;
-  --color-fg-soft: #4A434E;
-  --color-fg-faint: #685E6E;
-  --color-brand: #C76B55;
-  --color-brand-deep: #AA5642;
-  --color-danger: #DE5C5C;
-  --color-danger-deep: #BD4242;
-  --color-warn: #E5B55C;
-  --color-warn-deep: #C99942;
-  --color-info: #67506B;
-  --color-accent: #967D9B;
-}
-
+/* Light Mode Mapping */
 .light {
-  --color-app: #F3E9D5;
-  --color-surface: #E8DECA;
-  --color-elevated: #DED3BF;
-  --color-active: #D1C6B1;
-  --color-edge: #454B75;
-  --color-edge-soft: #A39682;
-  --color-fg: #20242B;
-  --color-fg-soft: #4A505E;
-  --color-fg-faint: #687085;
-  --color-brand: #D68A62;
-  --color-brand-deep: #BA714C;
-  --color-danger: #E25C5C;
-  --color-danger-deep: #C34242;
-  --color-warn: #D69542;
-  --color-warn-deep: #B87522;
-  --color-info: #454B75;
-  --color-accent: #8C3F56;
+  --bg-app: var(--color-parchment);
+  --bg-sidebar: var(--color-canvas);
+  --bg-card: var(--color-canvas);
+  --bg-nav: var(--color-pure-black); /* Nav is always black in Apple design */
+  
+  --text-main: var(--color-ink);
+  --text-muted: var(--color-ink-muted-80);
+  --text-faint: var(--color-ink-muted-48);
+  
+  --border-soft: rgba(0, 0, 0, 0.08);
+  --border-hard: rgba(0, 0, 0, 0.15);
+  
+  --accent-color: var(--color-primary);
+  --hover-bg: rgba(0, 0, 0, 0.05);
 }
 
-/* The app's own base rules -- all that survived main.css. */
+/* Map semantic classes so Tailwind can use them (Tailwind v4 handles custom vars automatically if registered, but we can just use arbitrary values or explicitly define them) */
+@theme {
+  --color-app: var(--bg-app);
+  --color-sidebar: var(--bg-sidebar);
+  --color-card: var(--bg-card);
+  --color-nav: var(--bg-nav);
+  
+  --color-fg: var(--text-main);
+  --color-fg-muted: var(--text-muted);
+  --color-fg-faint: var(--text-faint);
+  
+  --color-border-soft: var(--border-soft);
+  --color-border-hard: var(--border-hard);
+  
+  --color-accent: var(--accent-color);
+}
+
 @layer base {
   body {
-    font-family: var(--font-mono);
+    font-family: var(--font-text);
     font-size: 13px;
-    background: var(--color-app);
-    color: var(--color-fg);
+    background: var(--bg-app);
+    color: var(--text-main);
     overflow: hidden;
     height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
+  
+  /* Typographic classes for easy application */
+  .text-hero-display {
+    font-family: var(--font-display);
+    font-size: 32px;
+    font-weight: 600;
+    line-height: 1.07;
+    letter-spacing: -0.28px;
+  }
+  .text-display-lg {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: 0px;
+  }
+  .text-body-strong {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.24;
+    letter-spacing: -0.374px;
+  }
+  .text-body {
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.47;
+    letter-spacing: -0.374px;
+  }
+  .text-caption-strong {
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.43;
+    letter-spacing: -0.224px;
+  }
+  .text-caption {
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.43;
+    letter-spacing: -0.224px;
+  }
+  .text-button-utility {
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.29;
+    letter-spacing: -0.224px;
+  }
+  .text-nav-link {
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.0;
+    letter-spacing: -0.12px;
+  }
+  .text-fine-print {
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.0;
+    letter-spacing: -0.12px;
+  }
+}
+
+
+@layer utilities {
+  .bg-app { background-color: var(--bg-app); }
+  .bg-sidebar { background-color: var(--bg-sidebar); }
+  .bg-card { background-color: var(--bg-card); }
+  .bg-nav { background-color: var(--bg-nav); }
+  .text-fg { color: var(--text-main); }
+  .text-fg-muted { color: var(--text-muted); }
+  .text-fg-faint { color: var(--text-faint); }
+  .border-border-soft { border-color: var(--border-soft); }
+  .border-border-hard { border-color: var(--border-hard); }
+  .border-accent { border-color: var(--accent-color); }
+  .bg-accent { background-color: var(--accent-color); }
+  .text-accent { color: var(--accent-color); }
+  .hover\:text-fg:hover { color: var(--text-main); }
+  .hover\:bg-hover:hover { background-color: var(--hover-bg); }
 }

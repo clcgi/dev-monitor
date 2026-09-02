@@ -19,22 +19,22 @@ pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
     rsx! {
         // The scrim.
         div {
-            class: "fixed inset-0 z-40 bg-app/60",
+            class: "fixed inset-0 z-40 bg-black/40 backdrop-blur-sm",
             onclick: move |_| props.on_close.call(()),
         }
         aside {
             class: "fixed inset-y-0 right-0 z-50 flex w-full max-w-sm flex-col border-l \
-                    border-edge bg-surface shadow-2xl",
+                    border-border-soft bg-card shadow-2xl",
             div {
-                class: "flex shrink-0 items-center gap-2 border-b border-edge-soft px-4 py-3 \
-                        text-xs font-semibold uppercase tracking-wider text-fg-soft",
+                class: "flex shrink-0 items-center gap-2 border-b border-border-soft px-4 py-3 \
+                        text-xs font-semibold uppercase tracking-wider text-fg-muted",
                 i { class: "ph ph-clock-counter-clockwise" }
                 span { class: "flex-1", "Execution History" }
                 span { class: "font-normal normal-case tracking-normal text-fg-faint",
                     "{props.history.len()}" }
                 button {
                     r#type: "button",
-                    class: "rounded p-1 text-fg-faint hover:bg-active hover:text-fg",
+                    class: "rounded p-1 text-fg-faint hover:bg-black/5 dark:hover:bg-white/5 hover:text-fg",
                     onclick: move |_| props.on_close.call(()),
                     i { class: "ph ph-x" }
                 }
@@ -51,15 +51,15 @@ pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
                             let dur = format_duration(entry.end_time.signed_duration_since(entry.start_time));
                             rsx! {
                                 div {
-                                    class: "flex flex-col gap-1.5 border-b border-edge-soft \
+                                    class: "flex flex-col gap-1.5 border-b border-border-soft \
                                             px-4 py-2.5 last:border-b-0",
                                     div { class: "flex items-center justify-between gap-2",
                                         // Long names truncate rather than push the environment tag out of view.
                                         span { class: "truncate text-xs font-semibold text-fg",
                                             "{script_name}" }
                                         span {
-                                            class: "shrink-0 rounded bg-elevated px-1.5 py-0.5 \
-                                                    text-[10px] uppercase tracking-wider text-fg-soft",
+                                            class: "shrink-0 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 \
+                                                    text-[10px] uppercase tracking-wider text-fg-muted",
                                             "{env_name}"
                                         }
                                     }
@@ -90,7 +90,7 @@ fn format_duration(d: Duration) -> String {
 fn render_status(status: &ScriptStatus) -> Element {
     const DOT: &str = "ml-auto size-2 shrink-0 rounded-full";
     match status {
-        ScriptStatus::Succeeded => rsx! { span { class: "{DOT} bg-brand", title: "Succeeded" } },
+        ScriptStatus::Succeeded => rsx! { span { class: "{DOT} bg-accent", title: "Succeeded" } },
         ScriptStatus::Failed(_) => rsx! { span { class: "{DOT} bg-danger", title: "Failed" } },
         ScriptStatus::Cancelled => rsx! { span { class: "{DOT} bg-warn", title: "Cancelled" } },
         ScriptStatus::AppError(_) => rsx! { span { class: "{DOT} bg-danger", title: "Error" } },

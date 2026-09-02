@@ -87,76 +87,67 @@ pub fn Dashboard(props: DashboardProps) -> Element {
         div { class: "flex min-h-0 flex-1 flex-col",
 
             if no_script {
-                div { class: "flex flex-1 flex-col items-center justify-center gap-2 p-10 text-center",
-                    div { class: "text-[15px] text-fg-soft", "Select a script" }
-                    div { class: "text-xs text-fg-faint",
+                div { class: "flex flex-1 flex-col items-center justify-center gap-3 p-10 text-center",
+                    div { class: "text-body-strong text-fg-muted", "Select a script" }
+                    div { class: "text-caption text-fg-faint",
                         "Choose a script from the sidebar to monitor or run." }
                 }
             } else {
-                // THE HEIGHT CONTRACT, and it is the whole fix for the cropped log pane.
-                div { class: "flex h-full min-h-0 flex-col gap-3 p-4 sm:p-5",
+                div { class: "flex h-full min-h-0 flex-col gap-4 p-5 sm:p-6 overflow-y-auto",
 
-                    // The header stays put; only the controls below it scroll.
-                    div { class: "flex shrink-0 flex-col gap-1",
-                        div { class: "flex items-center gap-2",
-                            div { class: "flex-1 truncate text-lg font-semibold text-white",
+                    // HERO AREA (Apple style: massive typography, crisp status pill)
+                    div { class: "flex shrink-0 flex-col gap-3",
+                        div { class: "flex items-center justify-between gap-4",
+                            div { class: "flex-1 truncate text-display-lg text-fg",
                                 "{script_name}" }
-                            div { class: "flex shrink-0 items-center text-[11px] uppercase \
-                                          tracking-wider {status_class}",
-                                span { class: "mr-1.5 inline-block size-2 shrink-0 rounded-full {dot_class}" }
+                            div { class: "flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-caption-strong                                           {status_class} bg-black/5 dark:bg-white/5 border border-border-soft",
+                                span { class: "inline-block size-2 shrink-0 rounded-full {dot_class}" }
                                 "{status_str}{failed_code}"
                             }
                         }
-                        // What the script DOES, from its own header.
                         if let Some(meta) = state.selected_meta.as_ref() {
-                            div { class: "flex flex-wrap items-center gap-2 text-[11px] text-fg-faint",
+                            div { class: "flex flex-wrap items-center gap-2 text-body text-fg-muted",
                                 span {
-                                    class: "rounded border border-edge px-1.5 py-0.5 uppercase tracking-wider",
+                                    class: "rounded-md border border-border-soft px-2 py-0.5 text-caption-strong tracking-wide bg-card",
                                     "{meta.category}"
                                 }
                                 if !meta.summary.is_empty() {
-                                    span { class: "min-w-0 flex-1 leading-relaxed", "{meta.summary}" }
+                                    span { class: "min-w-0 flex-1 leading-relaxed text-neutral-500", "{meta.summary}" }
                                 }
                             }
                         }
                     }
 
-                    // The controls band.
-                    div { class: "flex max-h-[55%] min-h-0 shrink flex-col gap-3 overflow-y-auto pr-1",
+                    // MAIN CONTROLS BAND
+                    div { class: "flex shrink-0 flex-col gap-5",
 
-                        // ONE ROW: environment on the left, run on the right.
+                        // UTILITY CARD for controls
                         div {
-                            class: "flex shrink-0 flex-col gap-3 rounded-lg border border-edge \
-                                    bg-surface p-3",
-                            div { class: "flex flex-col gap-3 sm:flex-row sm:items-center",
+                            class: "flex shrink-0 flex-col gap-4 rounded-2xl border border-border-soft                                     bg-card p-5 shadow-sm",
+                            div { class: "flex flex-col gap-4 sm:flex-row sm:items-center",
                                 div { class: "min-w-0 flex-1",
                                     EnvironmentSelector {
                                         selected: state.selected_env,
                                         on_select: move |e| props.on_env_select.call(e),
                                     }
                                 }
-                                div { class: "flex shrink-0 items-center gap-3",
+                                div { class: "flex shrink-0 items-center gap-4",
                                     if no_env {
-                                        span { class: "text-[11px] text-warn", "Select an environment" }
+                                        span { class: "text-caption text-warn", "Select an environment" }
                                     }
                                     if let Some(other) = busy_with.as_ref() {
-                                        span { class: "text-[11px] text-warn",
-                                            "{other.replace(\"tools/\", \"\")} is still running" }
+                                        span { class: "text-caption text-warn",
+                                            "{other.replace(\"tools/\", \"\")} is running" }
                                     }
                                     if is_running {
                                         button {
-                                            class: "rounded-lg border border-danger bg-transparent px-3.5 \
-                                                    py-1.5 font-mono text-xs text-danger \
-                                                    hover:bg-danger-deep hover:text-white",
+                                            class: "rounded-full border border-danger/30 bg-danger/10 px-6                                                     py-2 text-button-utility text-danger                                                     hover:bg-danger hover:text-white transition-all scale-100 active:scale-95",
                                             onclick: move |_| props.on_stop.call(()),
                                             "Cancel"
                                         }
                                     } else {
                                         button {
-                                            class: "rounded-lg border border-brand-deep bg-brand-deep px-3.5 \
-                                                    py-1.5 font-mono text-xs text-white \
-                                                    hover:border-brand hover:bg-brand \
-                                                    disabled:cursor-default disabled:opacity-50",
+                                            class: "rounded-full bg-accent px-6                                                     py-2 text-button-utility text-white shadow-sm                                                     hover:opacity-90 transition-all scale-100 active:scale-95                                                     disabled:cursor-default disabled:opacity-50 disabled:scale-100",
                                             disabled: no_env || busy_with.is_some(),
                                             onclick: move |_| props.on_run.call(()),
                                             "{btn_text}"
@@ -165,7 +156,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                 }
                             }
 
-                            // INSIDE the card, under the row it modifies.
+                            // ArgPicker matches the minimal style inside the card
                             ArgPicker {
                                 args: state.selected_meta.as_ref().map(|m| m.args.clone()).unwrap_or_default(),
                                 enabled: run.enabled_args.clone(),
@@ -176,27 +167,23 @@ pub fn Dashboard(props: DashboardProps) -> Element {
 
                         if has_started {
                             div {
-                                class: "flex shrink-0 flex-wrap gap-6 rounded-lg border \
-                                        border-edge-soft bg-elevated px-4 py-2.5",
-                                div { class: "flex flex-col gap-0.5",
-                                    span { class: "text-[10px] uppercase tracking-wider text-fg-faint",
+                                class: "flex shrink-0 flex-wrap gap-6 rounded-2xl border                                         border-border-soft bg-card px-4 py-3 shadow-sm",
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-caption-strong text-fg-faint uppercase tracking-wider",
                                         "Started" }
-                                    span { class: "font-mono text-xs text-fg", "{started_str}" }
+                                    span { class: "font-mono text-[15px] text-fg", "{started_str}" }
                                 }
-                                div { class: "flex flex-col gap-0.5",
-                                    span { class: "text-[10px] uppercase tracking-wider text-fg-faint",
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-caption-strong text-fg-faint uppercase tracking-wider",
                                         "Duration" }
-                                    span { class: "font-mono text-xs text-fg", "{duration_str}" }
+                                    span { class: "font-mono text-[15px] text-fg", "{duration_str}" }
                                 }
                             }
                         }
 
-                        // A script that declares `steps=none` gets NO stepper.
                         if has_started && !state.selected_meta.as_ref().is_some_and(|m| m.has_no_steps()) {
                             WorkflowStepper {
-                                // Only the stages this script says it can reach.
                                 steps: state.selected_meta.as_ref().and_then(|m| m.steps().map(|s| s.to_vec())),
-                                // Seconds in the CURRENT stage.
                                 step_elapsed_s: run.step_started.map(|t| {
                                     Local::now().signed_duration_since(t).num_seconds().max(0) as u64
                                 }),
@@ -208,36 +195,35 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                             }
                         }
 
-                        // The stepper shows WHERE a run got to, this shows WHAT it concluded.
                         VerdictPanel {
                             verdicts: run.verdicts.clone(),
                             on_jump: move |label: String| props.on_jump_to_run.call(label),
                         }
                     }
 
-                    // NOT a `details` element any more.
+                    // TECHNICAL LOGS (Dark Terminal Tile)
                     div {
                         class: if props.logs_open {
-                            "flex min-h-[8rem] flex-1 flex-col overflow-hidden rounded-md \
-                             border border-edge bg-surface"
+                            "flex min-h-[16rem] flex-1 flex-col overflow-hidden rounded-2xl                              border border-border-soft bg-[#1E1E1E] shadow-inner mt-2"
                         } else {
-                            "flex shrink-0 flex-col overflow-hidden rounded-md border \
-                             border-edge bg-surface"
+                            "flex shrink-0 flex-col overflow-hidden rounded-2xl border                              border-border-soft bg-card shadow-sm mt-2"
                         },
                         button {
                             r#type: "button",
-                            class: "flex shrink-0 items-center gap-1.5 bg-elevated px-3 py-2 \
-                                    text-[10px] uppercase tracking-wider text-fg-faint \
-                                    hover:text-fg-soft",
+                            class: if props.logs_open {
+                                "flex shrink-0 items-center gap-2 bg-black/40 px-4 py-3                                  text-caption-strong text-white/70 hover:text-white transition-colors"
+                            } else {
+                                "flex shrink-0 items-center gap-2 bg-transparent px-4 py-3                                  text-caption-strong text-fg-muted hover:text-fg transition-colors"
+                            },
                             onclick: move |_| props.on_toggle_logs.call(()),
                             i {
-                                class: if props.logs_open { "ph ph-caret-down" } else { "ph ph-caret-right" },
+                                class: if props.logs_open { "ph ph-caret-down text-lg" } else { "ph ph-caret-right text-lg" },
                             }
                             span { "Technical Logs" }
-                            span { class: "ml-2 opacity-60", "{run.logs.len()}" }
+                            span { class: "ml-auto opacity-60 text-xs font-mono", "{run.logs.len()} lines" }
                         }
                         if props.logs_open {
-                            div { class: "flex min-h-0 flex-1 flex-col p-3",
+                            div { class: "flex min-h-0 flex-1 flex-col p-4",
                                 LogViewer {
                                     logs: run.logs.clone(),
                                     jump: props.log_jump,

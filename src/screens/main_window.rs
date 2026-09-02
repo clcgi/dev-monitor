@@ -246,53 +246,47 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     });
 
     rsx! {
-        div { class: "flex h-screen flex-col",
+        div { class: "flex h-screen flex-col bg-app",
             
-            // Topbar Converted to utilities.
+            // GLOBAL NAV (Apple style: 44px, pure black, white text)
             header {
-                class: "flex shrink-0 items-center gap-3 border-b border-edge bg-surface \
-                        px-3 py-2.5 sm:gap-4 sm:px-4",
-                span { class: "shrink-0 font-semibold tracking-tight text-fg", "DEV Monitor" }
-                div { class: "flex min-w-0 flex-col leading-tight",
-                    span { class: "truncate text-xs text-fg-soft", "CentralDocumentWarehouse" }
-                    span { class: "hidden truncate text-[11px] text-fg-faint sm:block",
-                        "Monitoring DEV ingestion pipeline" }
+                class: "flex h-[44px] shrink-0 items-center justify-between bg-nav px-4 text-white",
+                div { class: "flex items-center gap-2",
+                    /* i { class: "ph-fill ph-apple-logo text-lg" } */
+                    span { class: "text-nav-link tracking-widest uppercase", "DEV Monitor" }
                 }
-                // Pushes the controls to the trailing edge at every width.
-                div { class: "ml-auto" }
-                // The palette picker is deliberately NOT mounted.
-                button {
-                    r#type: "button",
-                    title: "Execution history",
-                    class: "flex items-center gap-2 rounded-md border border-edge bg-elevated \
-                            px-2.5 py-1.5 text-fg-soft transition-colors hover:bg-active \
-                            hover:text-fg focus:outline-none",
-                    onclick: move |_| { let open = *history_open.read(); history_open.set(!open); },
-                    i { class: "ph ph-clock-counter-clockwise text-base" }
-                    span { class: "hidden text-xs sm:inline", "History" }
-                    if !state.read().history.is_empty() {
-                        span {
-                            class: "rounded bg-active px-1.5 text-[10px] text-fg-faint",
-                            "{state.read().history.len()}"
-                        }
-                    }
-                }
-                // Only shown when an update exists, so it is not permanent chrome.
-                if let Some(u) = props.pending_update.clone() {
+                div { class: "flex items-center gap-4",
                     button {
                         r#type: "button",
-                        title: "Version {u.version} is available",
-                        class: "flex items-center gap-1.5 rounded-md border border-brand \
-                                bg-brand/15 px-2.5 py-1.5 text-brand hover:bg-brand/25",
-                        onclick: move |_| props.on_show_update.call(u.clone()),
-                        i { class: "ph-fill ph-arrow-circle-up text-base" }
-                        span { class: "hidden text-xs sm:inline", "Update" }
+                        title: "Execution history",
+                        class: "text-nav-link text-white/80 hover:text-white transition-colors flex items-center gap-1",
+                        onclick: move |_| { let open = *history_open.read(); history_open.set(!open); },
+                        i { class: "ph ph-clock-counter-clockwise text-sm" }
+                        span { class: "hidden sm:inline", "History" }
+                        if !state.read().history.is_empty() {
+                            span {
+                                class: "ml-1 rounded-full bg-white/20 px-1.5 py-0.5 text-[9px]",
+                                "{state.read().history.len()}"
+                            }
+                        }
                     }
-                }
-                crate::components::theme_toggle::ThemeToggle {
-                    preference: props.theme_preference,
-                    system_is_light: props.system_is_light,
-                    on_change: move |pref| props.on_theme_change.call(pref),
+                    
+                    if let Some(u) = props.pending_update.clone() {
+                        button {
+                            r#type: "button",
+                            title: "Version {u.version} is available",
+                            class: "text-nav-link text-accent hover:text-accent/80 flex items-center gap-1",
+                            onclick: move |_| props.on_show_update.call(u.clone()),
+                            i { class: "ph-fill ph-arrow-circle-up text-sm" }
+                            span { class: "hidden sm:inline", "Update" }
+                        }
+                    }
+
+                    crate::components::theme_toggle::ThemeToggle {
+                        preference: props.theme_preference,
+                        system_is_light: props.system_is_light,
+                        on_change: move |pref| props.on_theme_change.call(pref),
+                    }
                 }
             }
             
@@ -306,12 +300,9 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
             div { class: "flex min-h-0 flex-1",
                 Sidebar {
                     selected_script: state.read().selected_script.clone(),
-                    // Which script is running, so the sidebar can say so on the row itself.
                     running_script: state.read().running_script.clone(),
                     on_select: move |meta: crate::services::scripts::ScriptMeta| {
-                        // NOTHING IS CLEARED HERE ANY MORE, and that is the fix.
                         let mut s = state.write();
-                        // First touch seeds the entry, so its saved flags exist before the picker.
                         let defaults: Vec<String> = meta
                             .args
                             .iter()
@@ -326,7 +317,6 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                         s.selected_script = Some(meta.path.clone());
                         s.selected_meta = Some(meta);
                         drop(s);
-                        // The jump index points into the log shown before, which is a different list now.
                         log_jump.set(None);
                     },
                 }
@@ -336,7 +326,6 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     on_env_select: move |env| {
                         state.write().selected_env = Some(env);
                     },
-                    // Read so this component re-renders on the heartbeat, which is what advances.
                     tick: *tick.read(),
                     logs_open: *logs_open.read(),
                     log_jump,
@@ -345,7 +334,6 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                         logs_open.set(!open);
                     },
                     on_jump_to_run: move |label: String| {
-                        // The `[CDW_RUN: label]` line the flow prints at its own start, so the jump.
                         let needle = format!("[CDW_RUN: {label}]");
                         let found = state
                             .read()
@@ -354,13 +342,11 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                             .iter()
                             .rposition(|l| l.content.contains(&needle));
                         if let Some(index) = found {
-                            // Opened, because a jump into a collapsed pane silently does nothing.
                             logs_open.set(true);
                             let nonce = *jump_nonce.read() + 1;
                             jump_nonce.set(nonce);
                             log_jump.set(Some((nonce, index)));
                         } else {
-                            // Cloned out of the read borrow BEFORE writing: an `if let` over.
                             let selected = state.read().selected_script.clone();
                             let Some(path) = selected else { return };
                             state.write().entry(&path).logs.push(LogMsg {
@@ -401,33 +387,27 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
             // Auth reminder modal overlay
             if *props.show_auth_reminder.read() {
                 div {
-                    class: "fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4",
+                    class: "fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm",
                     div {
-                        // w-full + max-w-md instead of a fixed 460px: the dialog no longer overflows.
-                        class: "flex max-h-[84vh] w-full max-w-md flex-col overflow-hidden \
-                                rounded-xl border border-edge bg-surface",
+                        class: "flex max-h-[84vh] w-full max-w-md flex-col overflow-hidden                                 rounded-2xl border border-border-soft bg-card shadow-2xl",
                         div {
-                            class: "flex shrink-0 items-center justify-between border-b \
-                                    border-edge-soft px-4 py-3 font-semibold text-fg",
-                            span { "Azure Authentication Required" }
+                            class: "flex shrink-0 items-center justify-between border-b                                     border-border-soft px-5 py-4",
+                            span { class: "text-body-strong text-fg", "Azure Authentication Required" }
                             button {
-                                class: "text-xl leading-none text-fg-faint hover:text-fg",
+                                class: "text-xl leading-none text-fg-faint hover:text-fg transition-colors",
                                 onclick: move |_| props.show_auth_reminder.set(false),
                                 "×"
                             }
                         }
-                        div { class: "flex flex-col gap-2.5 overflow-y-auto p-4 text-sm text-fg-soft",
+                        div { class: "flex flex-col gap-3 overflow-y-auto p-5 text-body text-fg-muted",
                             p { "You must be authenticated with Azure to interact with the environment." }
                             p { "Please ensure you have run:" }
-                            p {
-                                class: "rounded-md bg-app p-2.5 font-mono text-[11px] \
-                                        leading-relaxed text-fg-soft",
+                            div {
+                                class: "rounded-lg bg-black/5 dark:bg-black/40 p-4 font-mono text-[13px]                                         text-fg shadow-inner border border-border-soft/50",
                                 "az login"
                             }
                             button {
-                                class: "mt-2 w-full rounded-lg border border-brand-deep \
-                                        bg-brand-deep px-3.5 py-1.5 font-mono text-xs text-white \
-                                        hover:border-brand hover:bg-brand",
+                                class: "mt-4 w-full rounded-full bg-accent px-5 py-3 text-button-utility text-white                                         hover:scale-95 transition-transform",
                                 onclick: move |_| props.show_auth_reminder.set(false),
                                 "I have authenticated"
                             }

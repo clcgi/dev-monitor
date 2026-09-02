@@ -19,9 +19,9 @@ pub fn ArgPicker(props: ArgPickerProps) -> Element {
     }
 
     rsx! {
-        div { class: "flex flex-col gap-2",
-            div { class: "text-[10px] uppercase tracking-wider text-fg-faint", "Options" }
-            div { class: "flex flex-wrap gap-2",
+        div { class: "flex flex-col gap-3",
+            div { class: "text-caption-strong text-fg-faint", "Options" }
+            div { class: "flex flex-wrap gap-2.5",
                 for arg in props.args.iter() {
                     {
                         let on = props.enabled.contains(&arg.flag);
@@ -31,34 +31,28 @@ pub fn ArgPicker(props: ArgPickerProps) -> Element {
                                 key: "{arg.flag}",
                                 r#type: "button",
                                 disabled: props.disabled,
-                                // The help text is the tooltip.
                                 title: "{arg.help}",
                                 class: if on {
-                                    "flex items-center gap-1.5 rounded-md border border-brand \
-                                     bg-brand/15 px-2.5 py-1.5 font-mono text-[11px] text-brand \
-                                     disabled:opacity-40"
+                                    "flex items-center gap-2 rounded-full border border-accent                                      bg-accent px-4 py-2 text-button-utility text-white shadow-sm                                      disabled:opacity-50 transition-colors"
                                 } else {
-                                    "flex items-center gap-1.5 rounded-md border border-edge \
-                                     bg-elevated px-2.5 py-1.5 font-mono text-[11px] text-fg-soft \
-                                     hover:bg-active hover:text-fg disabled:opacity-40"
+                                    "flex items-center gap-2 rounded-full border border-border-hard                                      bg-transparent px-4 py-2 text-button-utility text-fg-muted                                      hover:border-fg hover:text-fg disabled:opacity-50 transition-colors"
                                 },
                                 onclick: move |_| props.on_toggle.call(flag.clone()),
                                 i {
-                                    class: if on { "ph-fill ph-check-square" } else { "ph ph-square" },
+                                    class: if on { "ph-fill ph-check-circle" } else { "ph ph-circle" },
                                 }
-                                "{arg.flag}"
+                                span { class: "font-mono text-xs font-medium", "{arg.flag}" }
                             }
                         }
                     }
                 }
             }
-            // The help of every enabled flag, spelled out.
             for arg in props.args.iter().filter(|a| props.enabled.contains(&a.flag)) {
                 if !arg.help.is_empty() {
                     div {
                         key: "{arg.flag}",
-                        class: "text-[11px] leading-relaxed text-fg-faint",
-                        span { class: "font-mono text-fg-soft", "{arg.flag}" }
+                        class: "text-caption text-fg-muted",
+                        span { class: "font-mono font-medium text-fg", "{arg.flag}" }
                         " — {arg.help}"
                     }
                 }
