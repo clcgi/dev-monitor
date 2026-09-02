@@ -10,15 +10,6 @@ pub struct HistoryPanelProps {
 }
 
 /// Execution history, as a slide-over panel.
-///
-/// WHY IT LEFT THE MAIN PAGE. History is a record ACROSS runs, and it was
-/// sitting inside the view of ONE run -- competing for height with the stepper,
-/// the options and the log pane, all of which describe the execution actually
-/// in front of you. On a short window it took space from the logs to show rows
-/// about runs that had already finished.
-///
-/// A panel rather than a route: it is consulted, not navigated to, and it must
-/// not replace the view of a run that is still going.
 #[component]
 pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
     if !props.open {
@@ -26,8 +17,7 @@ pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
     }
 
     rsx! {
-        // The scrim. Click-to-dismiss, because a panel whose only exit is a
-        // small × reads as modal when it is not.
+        // The scrim.
         div {
             class: "fixed inset-0 z-40 bg-app/60",
             onclick: move |_| props.on_close.call(()),
@@ -64,8 +54,7 @@ pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
                                     class: "flex flex-col gap-1.5 border-b border-edge-soft \
                                             px-4 py-2.5 last:border-b-0",
                                     div { class: "flex items-center justify-between gap-2",
-                                        // Long tool names truncate rather than
-                                        // pushing the environment tag out of view.
+                                        // Long names truncate rather than push the environment tag out of view.
                                         span { class: "truncate text-xs font-semibold text-fg",
                                             "{script_name}" }
                                         span {
@@ -99,9 +88,6 @@ fn format_duration(d: Duration) -> String {
 }
 
 fn render_status(status: &ScriptStatus) -> Element {
-    // `ml-auto` pins the dot to the trailing edge, which is what `.history-status`
-    // did. NOTE: `dot-warning` was referenced here and DEFINED NOWHERE, before
-    // this change -- Cancelled rendered an invisible dot. It is now `bg-warn`.
     const DOT: &str = "ml-auto size-2 shrink-0 rounded-full";
     match status {
         ScriptStatus::Succeeded => rsx! { span { class: "{DOT} bg-brand", title: "Succeeded" } },

@@ -110,6 +110,47 @@ To bundle for Linux (creates `.deb` or AppImage depending on your setup), run on
 dx bundle --release --platform desktop
 ```
 
+## Releases and the update check
+
+`.github/workflows/release.yml` builds both installers and publishes them.
+Pushing a tag (`v*`) creates the Release; **Run workflow** builds them without
+publishing, so packaging can be checked without spending a version number.
+
+Each job attaches **exactly one** file — a `.dmg` from macOS, an `.exe` from
+Windows — and fails if it finds none or more than one. An earlier version fell
+back to searching `target/` when the bundle directory looked empty, which on
+Windows swept up an `.exe` for every build script and attached **40 assets** to
+the Release. A page listing 40 files is worse than one listing none: nobody can
+tell which is the installer.
+
+Both installers are **unsigned**, so macOS reports "damaged" and Windows shows
+SmartScreen. The release notes carry the one-liner for each.
+
+### The in-app update check
+
+At startup the app asks GitHub for the latest release and, if it is newer than
+the running binary, shows a banner for five seconds with a **Download** button
+that opens the release page in the system browser.
+
+- **One request, at startup, never repeated.** This is a tool someone opens to
+  watch a run, not a daemon — polling would spend rate limit to tell the user
+  something they saw when they opened it.
+- **The five seconds start when the answer arrives**, not at launch, so a slow
+  network cannot consume the whole window before there is anything to show.
+- **Failure is silent.** Offline, rate-limited, GitHub down — all show nothing.
+  The app works offline apart from its icon font.
+- **The banner overlays**, it does not push the layout down: nothing reflows on
+  arrival or departure, and nothing shifts under the pointer mid-run.
+
+Versions compare **numerically, segment by segment**. A string comparison puts
+`0.10.0` before `0.9.0`, so the tenth release would silently stop offering
+itself to anyone still on the ninth.
+
+`reqwest` is pinned to **native-tls**, not rustls: rustls 0.23 defaults to
+`aws-lc-rs`, whose build script needs CMake with an MSVC generator and NASM on
+Windows — it is what broke the Windows release job, and fetching one JSON
+document is not worth carrying a C toolchain for.
+
 ## Styling & Themes
 
 The UI uses **Tailwind CSS v4** alongside a legacy hand-written stylesheet. 

@@ -1,24 +1,11 @@
 //! Palette selector.
-//!
-//! WHY THIS EXISTS. The old stylesheet carried four fully-specified palettes since
-//! the app was written -- `theme-electric-autumn`, `theme-warm-editorial`,
-//! `theme-seasonless-blue`, `theme-digital-romance`, each with a light
-//! counterpart. **Nothing ever selected one.** The only class the app set on
-//! `<body>` was `light`, so 8 of the 9 palette blocks were unreachable and the
-//! README's "change the active palette by modifying the `<body>` tag class"
-//! meant editing the source and rebuilding.
-//!
-//! Written entirely in Tailwind utilities: no rule for it exists in the legacy
-//! stylesheet, and none needs to.
 
 use crate::THEMES;
 use dioxus::prelude::*;
 
 #[component]
 pub fn ThemePicker() -> Element {
-    // The same signal `App` writes to <body>, so choosing here re-themes every
-    // utility on the page: the palette lives in CSS custom properties that each
-    // Tailwind colour utility already reads.
+    // The same signal `App` writes to <body>, so choosing here re-themes every.
     let mut theme = use_context::<Signal<String>>();
     let mut open = use_signal(|| false);
     let current = theme.read().clone();
@@ -31,9 +18,7 @@ pub fn ThemePicker() -> Element {
     rsx! {
         div { class: "relative",
             button {
-                // `hidden sm:inline` on the label: at narrow widths the palette
-                // name is the first thing worth dropping -- the swatch alone
-                // still says which theme is active.
+                // The label drops first when space runs out; the swatch still identifies it.
                 class: "flex items-center gap-2 rounded-md border border-edge bg-elevated \
                         px-2.5 py-1.5 text-fg-soft transition-colors hover:bg-active \
                         hover:text-fg focus:outline-none",
@@ -43,8 +28,7 @@ pub fn ThemePicker() -> Element {
                 i { class: "ph ph-caret-down text-xs opacity-60" }
             }
             if *open.read() {
-                // A click-catcher behind the menu. Without it the only way to
-                // dismiss is to pick something, which makes the menu feel stuck.
+                // A click-catcher behind the menu.
                 div {
                     class: "fixed inset-0 z-40",
                     onclick: move |_| open.set(false),

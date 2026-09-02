@@ -1,6 +1,6 @@
 [package]
 name = "dev-monitor"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Monitor and test DEV ingestion workflow"
 
@@ -12,6 +12,14 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dark-light = "1"
 futures-util = "0.3"
+
+# The update check, and the TLS choice behind it is deliberate.
+#
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+
+# Opens the release page in the user's browser. Tiny, and the alternative is
+# shelling out to `open`/`start` per platform, which this crate is.
+open = "5"
 
 # Shrink the debug target dir: keep file:line for readable backtraces, drop the
 # heavier variable/type debug info only a step-debugger needs, and none of us do.

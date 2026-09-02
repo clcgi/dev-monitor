@@ -16,23 +16,17 @@ pub struct DashboardProps {
     pub on_toggle_arg: EventHandler<String>,
     pub on_jump_to_run: EventHandler<String>,
     pub on_toggle_logs: EventHandler<()>,
-    /// A once-a-second counter while a script runs. Never read for its
-    /// value -- it exists so this component re-renders during a wait that
-    /// produces no log lines, which is what keeps the elapsed times moving.
+    /// A once-a-second counter while a script runs.
     pub tick: u64,
     pub logs_open: bool,
-    /// (nonce, line index). A Signal rather than a value so the log viewer's
-    /// effect has something reactive to depend on -- see LogViewerProps::jump.
+    /// (nonce, line index).
     pub log_jump: Signal<Option<(u64, usize)>>,
 }
 
 #[component]
 pub fn Dashboard(props: DashboardProps) -> Element {
     let state = props.state.read();
-    // Everything about the run belongs to the SELECTED script, not to the
-    // app: another script may be running right now, and its logs are its
-    // own. Cloned once so the rest of the render reads a consistent
-    // snapshot rather than re-borrowing the signal per field.
+    // Everything about the run belongs to the SELECTED script, not to the app.
     let run = state.current();
     let script_name = state
         .selected_script
@@ -46,9 +40,6 @@ pub fn Dashboard(props: DashboardProps) -> Element {
     let is_succeeded = matches!(status, ScriptStatus::Succeeded);
     let is_failed = matches!(status, ScriptStatus::Failed(_) | ScriptStatus::AppError(_));
 
-    // `status-warning` and `dot-warning` were referenced here and defined
-    // NOWHERE, so a Cancelled run showed uncoloured text beside an invisible
-    // dot -- the one status a user most needs to distinguish from Failed.
     let (status_str, status_class, dot_class) = match status {
         ScriptStatus::Idle => ("Idle", "text-fg-faint", "bg-fg-faint"),
         ScriptStatus::Running => ("Running", "text-info", "bg-info animate-pulse"),
@@ -74,10 +65,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
     let has_started = run.has_started();
     let no_script = state.selected_script.is_none();
     let no_env = state.selected_env.is_none();
-    // Something else is mid-run. Only ONE process is spawned at a time, and a
-    // Run sent now sits unread in the channel until the current one exits --
-    // the button appeared to do nothing, and then the wrong script started
-    // minutes later. Say so instead.
+    // Something else is mid-run.
     let busy_with = state
         .running_script
         .clone()
@@ -105,13 +93,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                         "Choose a script from the sidebar to monitor or run." }
                 }
             } else {
-                // THE HEIGHT CONTRACT, and it is the whole fix for the cropped
-                // log pane. Every ancestor from here down carries `min-h-0`,
-                // because a flex child's default `min-height:auto` refuses to
-                // shrink below its content -- so the controls above pushed the
-                // log pane off the bottom of a short window with nothing able to
-                // scroll. Now the controls scroll within a capped band and the
-                // log pane takes the rest.
+                // THE HEIGHT CONTRACT, and it is the whole fix for the cropped log pane.
                 div { class: "flex h-full min-h-0 flex-col gap-3 p-4 sm:p-5",
 
                     // The header stays put; only the controls below it scroll.
@@ -125,10 +107,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                 "{status_str}{failed_code}"
                             }
                         }
-                        // What the script DOES, from its own header. The file
-                        // name says `flow_5_quarantine` and not what a pass
-                        // means, and that sentence already exists in the script
-                        // -- it was only ever shown in a sidebar tooltip.
+                        // What the script DOES, from its own header.
                         if let Some(meta) = state.selected_meta.as_ref() {
                             div { class: "flex flex-wrap items-center gap-2 text-[11px] text-fg-faint",
                                 span {
@@ -142,15 +121,10 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                         }
                     }
 
-                    // The controls band. Capped and scrollable so that on a short
-                    // window it gives way to the logs instead of squeezing them out.
+                    // The controls band.
                     div { class: "flex max-h-[55%] min-h-0 shrink flex-col gap-3 overflow-y-auto pr-1",
 
                         // ONE ROW: environment on the left, run on the right.
-                        // These were stacked in a column with a paragraph of
-                        // guidance between them, so the primary action sat below
-                        // the fold on a short window -- and the two halves of a
-                        // single decision read as two unrelated sections.
                         div {
                             class: "flex shrink-0 flex-col gap-3 rounded-lg border border-edge \
                                     bg-surface p-3",
@@ -191,12 +165,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                 }
                             }
 
-                            // INSIDE the card, under the row it modifies. As a
-                            // sibling it read as an unrelated section, and the
-                            // flags belong to the run button beside them -- most
-                            // of all `--apply`, whose consequence has to be
-                            // visible in the same glance as the button that
-                            // applies it.
+                            // INSIDE the card, under the row it modifies.
                             ArgPicker {
                                 args: state.selected_meta.as_ref().map(|m| m.args.clone()).unwrap_or_default(),
                                 enabled: run.enabled_args.clone(),
@@ -222,22 +191,12 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                             }
                         }
 
-                        // A script that declares `steps=none` gets NO stepper. It
-                        // reaches no pipeline stage, and eleven grey nodes above
-                        // its output said otherwise -- which is what
-                        // reset_test_documents looked like before the declaration
-                        // existed.
+                        // A script that declares `steps=none` gets NO stepper.
                         if has_started && !state.selected_meta.as_ref().is_some_and(|m| m.has_no_steps()) {
                             WorkflowStepper {
                                 // Only the stages this script says it can reach.
-                                // A stepper showing eleven stages for a flow that
-                                // touches four spends most of its width on nodes
-                                // that will never light, and the four that matter
-                                // are indistinguishable from the seven that were
-                                // never going to happen.
                                 steps: state.selected_meta.as_ref().and_then(|m| m.steps().map(|s| s.to_vec())),
-                                // Seconds in the CURRENT stage. The one thing
-                                // on screen that separates waiting from stuck.
+                                // Seconds in the CURRENT stage.
                                 step_elapsed_s: run.step_started.map(|t| {
                                     Local::now().signed_duration_since(t).num_seconds().max(0) as u64
                                 }),
@@ -249,20 +208,14 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                             }
                         }
 
-                        // The stepper shows WHERE a run got to, this shows WHAT
-                        // it concluded. A suite's later flow can be mid-chain
-                        // while three earlier verdicts already stand.
+                        // The stepper shows WHERE a run got to, this shows WHAT it concluded.
                         VerdictPanel {
                             verdicts: run.verdicts.clone(),
                             on_jump: move |label: String| props.on_jump_to_run.call(label),
                         }
                     }
 
-                    // NOT a `details` element any more. `details` gives no way
-                    // to say "fill the remaining height when open", so the pane
-                    // had a fixed h-64/h-96 and was cropped by whatever the
-                    // controls above happened to need. As a controlled block it
-                    // can be `flex-1 min-h-0` when open and `shrink-0` when shut.
+                    // NOT a `details` element any more.
                     div {
                         class: if props.logs_open {
                             "flex min-h-[8rem] flex-1 flex-col overflow-hidden rounded-md \

@@ -1,21 +1,4 @@
 //! What the app knows about each script, and where it learns it.
-//!
-//! THE DECLARATION LIVES IN THE SCRIPT, not in a manifest here. A list in this
-//! file would be a second copy of something the script already knows, and the
-//! copy rots silently: a renamed flag keeps working from the terminal and
-//! quietly stops working from the app, with the button still offering it.
-//!
-//! The format is a comment, so it is inert to both Python and bash and the
-//! standalone `python tools/x.py` path is untouched -- the same constraint the
-//! `[CDW_STEP: ...]` markers were written under:
-//!
-//!     # CDW_SCRIPT: category=Flows; steps=Neo,Authentication,Apim,Landing
-//!     # CDW_ARG: --apply  Actually delete. Without it this is a dry run.
-//!
-//! EVERY FIELD IS OPTIONAL and a script with no header still runs. That is not
-//! politeness: `tools/` holds fifteen scripts written before this existed, and
-//! a reader that hid or broke them would be worse than one that shows them
-//! plainly. Absent `steps` means "unknown", never "none" -- see `steps()`.
 
 use std::fs;
 use std::path::Path;
@@ -27,44 +10,34 @@ use crate::services::state::WorkflowStep;
 pub struct ScriptArg {
     pub flag: String,
     pub help: String,
-    /// Pre-selected when the script is chosen. For flags whose ABSENCE is the
-    /// dangerous state -- there are none today, and the default is off because
-    /// the reverse mistake (a destructive flag on by accident) is worse.
+    /// Pre-selected when the script is chosen.
     pub default_on: bool,
 }
 
 /// What a script says about the pipeline stages it can reach.
-///
-/// THREE STATES, because "I touch nothing" and "I have not said" are different
-/// claims and only one of them is safe to draw. `reset_test_documents.py`
-/// reaches no stage at all and must show no stepper; a script that simply has
-/// not been annotated has made no such claim, and rendering an empty track for
-/// it would put words in its mouth.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum DeclaredSteps {
-    /// No declaration. The caller shows the whole chain.
+    /// No declaration.
     Unknown,
-    /// `steps=none` -- explicitly touches no pipeline stage. Show no stepper.
+    /// `steps=none` -- explicitly touches no pipeline stage.
     None,
-    /// The stages named, resolved. Never empty.
+    /// The stages named, resolved.
     Only(Vec<WorkflowStep>),
 }
 
 /// One script, as the app understands it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ScriptMeta {
-    /// Repo-relative, e.g. `tools/flow_1_park.py`.
+    /// Repo-relative, e.g.
     pub path: String,
-    /// Sidebar group. `Other` when the script does not say.
+    /// Sidebar group.
     pub category: String,
     /// Stages the script can reach.
     pub declared_steps: DeclaredSteps,
     pub args: Vec<ScriptArg>,
     /// A one-line summary, taken from the header when given.
     pub summary: String,
-    /// Not offered for running. Libraries live in `tools/` beside the scripts
-    /// and are indistinguishable by extension; launching one does nothing,
-    /// which reads as a broken script rather than a category error.
+    /// Not offered for running.
     pub library: bool,
 }
 
@@ -82,32 +55,21 @@ impl ScriptMeta {
         }
     }
 
-    /// True when the script says it reaches no pipeline stage, so the stepper
-    /// should not be drawn at all.
+    /// True when the script says it reaches no pipeline stage, so the stepper.
     pub fn has_no_steps(&self) -> bool {
         self.declared_steps == DeclaredSteps::None
     }
 
-    /// `py` or `sh`. Used by the language filter, which is a second axis over
-    /// the same list rather than a second grouping -- a script has one category
-    /// and one language, and nesting them would make four of the groups empty
-    /// most of the time.
+    /// `py` or `sh`.
     pub fn language(&self) -> &'static str {
         if self.path.ends_with(".py") { "py" } else { "sh" }
     }
 }
 
 /// Scripts a script author would never want offered as runnable.
-///
-/// Named here rather than in each file because these predate the header and
-/// are not ours to churn. A `library=true` field in the header overrides.
 const KNOWN_LIBRARIES: [&str; 1] = ["cdw_client.py"];
 
 /// How many lines from the top to scan for the header.
-///
-/// Bounded so a large script is not read in full on every refresh, and so a
-/// `CDW_SCRIPT:` string appearing in a docstring far below cannot be picked up
-/// as a declaration.
 const HEADER_LINES: usize = 60;
 
 fn parse_pairs(payload: &str) -> Vec<(String, String)> {
@@ -118,8 +80,7 @@ fn parse_pairs(payload: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Read one script's declaration. Never fails: an unreadable or undeclared
-/// script yields defaults.
+/// Read one script's declaration.
 pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
     let mut meta = ScriptMeta {
         path: repo_relative.to_string(),
@@ -149,10 +110,7 @@ pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
                                 .split(',')
                                 .filter_map(|s| WorkflowStep::from_marker(s.trim()))
                                 .collect();
-                            // A declaration whose every name was a typo is not
-                            // a claim to touch nothing -- it is a broken
-                            // declaration, and treating it as `none` would hide
-                            // the stepper and look deliberate.
+                            // A declaration whose every name was a typo is not a claim to touch nothing.
                             if resolved.is_empty() {
                                 DeclaredSteps::Unknown
                             } else {
@@ -164,9 +122,7 @@ pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
                 }
             }
         } else if let Some(payload) = line.split_once("CDW_ARG:").map(|(_, p)| p) {
-            // `--flag  help text`: the flag is the first token, everything
-            // after it is prose. Split on whitespace rather than on a
-            // separator character so help text can contain anything.
+            // `--flag  help text`: first token is the flag, the rest is prose.
             let payload = payload.trim();
             let (flag, help) = payload.split_once(char::is_whitespace).unwrap_or((payload, ""));
             if flag.starts_with('-') {
@@ -183,9 +139,6 @@ pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
 }
 
 /// Every runnable script under `tools/`, grouped for the sidebar.
-///
-/// Returns `(category, scripts)` sorted by category then by file name, so the
-/// order does not depend on the filesystem's.
 pub fn discover(tools_dir: &Path) -> Vec<(String, Vec<ScriptMeta>)> {
     let mut found: Vec<ScriptMeta> = Vec::new();
 
@@ -226,9 +179,7 @@ pub fn discover(tools_dir: &Path) -> Vec<(String, Vec<ScriptMeta>)> {
     grouped
 }
 
-/// Category order in the sidebar. Deliberately not alphabetical: the groups a
-/// user reaches for most sit at the top, and `Other` -- the undeclared
-/// scripts -- sits last rather than wherever its initial letter falls.
+/// Category order in the sidebar.
 fn category_rank(category: &str) -> u8 {
     match category {
         "Flows" => 0,
@@ -283,9 +234,7 @@ mod tests {
 
     #[test]
     fn an_undeclared_script_still_appears_and_claims_nothing() {
-        // fifteen scripts predate this header. Hiding them, or rendering an
-        // empty stepper that asserts they touch no stage, would both be worse
-        // than saying nothing about them.
+        // fifteen scripts predate this header.
         let dir = tempdir("undeclared");
         let path = write(&dir, "old.sh", "#!/usr/bin/env bash\necho hello\n");
         let meta = parse_meta(&path, "tools/old.sh");
@@ -319,8 +268,7 @@ mod tests {
 
     #[test]
     fn a_declaration_below_the_header_window_is_ignored() {
-        // Otherwise a docstring quoting the format -- which this project's
-        // documentation does -- would be read as a declaration.
+        // Otherwise a docstring quoting the format -- which this project's.
         let dir = tempdir("deep");
         let body = format!("{}# CDW_SCRIPT: category=Flows\n", "x\n".repeat(HEADER_LINES + 5));
         let path = write(&dir, "x.py", &body);
@@ -329,8 +277,7 @@ mod tests {
 
     #[test]
     fn an_arg_without_a_leading_dash_is_not_an_arg() {
-        // A positional would be appended to the command line as a bare word and
-        // silently change what the script operates on.
+        // A positional would be appended as a bare word and change the target.
         let dir = tempdir("badarg");
         let path = write(&dir, "x.py", "# CDW_ARG: apply  no dash\n# CDW_ARG: --ok  fine\n");
         let meta = parse_meta(&path, "tools/x.py");
@@ -340,8 +287,7 @@ mod tests {
 
     #[test]
     fn steps_none_is_a_claim_to_touch_nothing_and_hides_the_stepper() {
-        // The reason this state exists: reset_test_documents.py reaches no
-        // pipeline stage, and it was rendering all eleven nodes.
+        // The reason this state exists: reset_test_documents.py reaches no pipeline.
         let dir = tempdir("stepsnone");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=none\n");
         let meta = parse_meta(&path, "tools/x.py");
@@ -352,8 +298,7 @@ mod tests {
 
     #[test]
     fn an_undeclared_script_is_not_treated_as_touching_nothing() {
-        // Unknown and none must not collapse: one draws the whole chain, the
-        // other draws no chain, and guessing either way misreports the script.
+        // Unknown and none must not collapse: one draws the whole chain, the other.
         let dir = tempdir("unknownsteps");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: category=Flows\n");
         let meta = parse_meta(&path, "tools/x.py");

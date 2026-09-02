@@ -24,10 +24,7 @@ impl ScriptRunner {
             workspace_root
         };
 
-        // Args are QUOTED individually. They come from a script's own
-        // declaration rather than free text, but this string is handed to
-        // `bash -c`, and an unquoted value is one shell metacharacter away from
-        // being a second command.
+        // Args are QUOTED individually.
         let quoted: String = args
             .iter()
             .map(|a| format!(" '{}'", a.replace('\'', r"'\''")))
@@ -35,8 +32,6 @@ impl ScriptRunner {
 
         let command_str = if script_path.ends_with(".py") {
             // -u so the child does not block-buffer its stdout into the pipe.
-            // Without it a long run shows nothing until it exits, and the live
-            // stepper this app exists for never moves.
             format!(".venv/bin/python -u {}{}", script_path, quoted)
         } else {
             format!("bash {}{}", script_path, quoted)

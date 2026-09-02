@@ -102,36 +102,17 @@ impl WorkflowStep {
 }
 
 /// One verdict a run reported about itself, from a `[CDW_RESULT: ...]` marker.
-///
-/// SEPARATE FROM `ScriptStatus`, which is derived from the process exit code.
-/// The two answer different questions and can legitimately disagree: a suite
-/// script exits non-zero because one of six flows failed, and the five that
-/// passed are still results worth showing. The exit code is the runner's view;
-/// these are the script's own.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Verdict {
-    /// The flow that reported it. May be empty: a script that reports only its
-    /// own outcome is still reporting something.
+    /// The flow that reported it. May be empty.
     pub label: String,
     pub ok: bool,
 }
 
-/// Everything about ONE script: what it is configured to run with, and what the
-/// last run of it did.
-///
-/// WHY THIS IS PER SCRIPT AND NOT ONE SET OF FIELDS ON `AppState`. It used to be
-/// global, and selecting another script wiped it -- so clicking away from a
-/// running flow and back lost its logs, its stepper and its verdicts. Worse and
-/// less obvious: the process kept running and kept appending, so its output
-/// landed in whatever script was selected by then. Two scripts' runs ended up
-/// interleaved in one log with nothing saying so.
-///
-/// Keyed by the script's path, so a run and the view of it cannot drift apart.
+/// Everything about ONE script: what it is configured to run with, and what.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct ScriptState {
-    /// Flags switched on for the next run. Per script for the same reason as
-    /// the rest: `--apply` chosen for the reset tool must not follow the user
-    /// to another script, and must still be there when they come back.
+    /// Flags switched on for the next run.
     pub enabled_args: Vec<String>,
     pub status: ScriptStatus,
     pub logs: Vec<LogMsg>,
@@ -158,10 +139,6 @@ pub struct AppState {
     /// One entry per script the user has touched, keyed by path.
     pub scripts: HashMap<String, ScriptState>,
     /// The script currently executing, if any.
-    ///
-    /// Held here rather than derived from the statuses so the sidebar and the
-    /// process loop cannot disagree, and so "something is running" survives the
-    /// user selecting a different script.
     pub running_script: Option<String>,
     pub history: Vec<HistoryEntry>,
 }
@@ -179,9 +156,6 @@ impl AppState {
     }
 
     /// The selected script's state, or a default view of one never run.
-    ///
-    /// Returns an owned value rather than a reference so a caller can hold it
-    /// across a render without keeping the signal borrowed.
     pub fn current(&self) -> ScriptState {
         self.selected_script
             .as_ref()
@@ -195,7 +169,6 @@ impl AppState {
         self.scripts.entry(path.to_string()).or_default()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -211,9 +184,7 @@ mod tests {
 
     #[test]
     fn two_scripts_keep_their_own_logs() {
-        // THE BUG THIS EXISTS FOR. Run state was global, so a running script
-        // kept appending after the user selected another one -- and its output
-        // landed in that other script's view, with nothing saying so.
+        // THE BUG THIS EXISTS FOR. Run state was global, so a running script kept.
         let mut state = AppState::new();
         state.entry("tools/flow_1_park.py").logs.push(log("park output"));
         state.entry("tools/flow_2_promote.py").logs.push(log("promote output"));
@@ -231,8 +202,7 @@ mod tests {
 
     #[test]
     fn selecting_another_script_does_not_disturb_a_running_one() {
-        // Selecting is a change of VIEW. It used to clear the logs, the stepper
-        // and the verdicts of a run that was still in progress.
+        // Selecting is a change of view; it used to clear a running script's state.
         let mut state = AppState::new();
         state.running_script = Some("tools/flow_3_extract.py".into());
         let running = state.entry("tools/flow_3_extract.py");
@@ -269,8 +239,7 @@ mod tests {
 
     #[test]
     fn a_script_never_run_reads_as_idle_rather_than_missing() {
-        // The view must render for a script with no history at all, and it must
-        // not inherit the previous selection's status.
+        // Must render for an unrun script, without inheriting the last selection.
         let mut state = AppState::new();
         state.entry("tools/flow_1_park.py").status = ScriptStatus::Failed(2);
         state.selected_script = Some("tools/flow_9_new.py".into());
@@ -282,8 +251,7 @@ mod tests {
 
     #[test]
     fn enabled_flags_are_remembered_per_script() {
-        // `--apply` chosen for the reset tool must not follow the user to
-        // another script, and must still be there when they come back.
+        // `--apply` chosen for the reset tool must not follow the user to another.
         let mut state = AppState::new();
         state.entry("tools/reset_test_documents.py").enabled_args = vec!["--apply".into()];
         state.entry("tools/verify_ingestion.py").enabled_args = vec!["--json".into()];
@@ -296,8 +264,7 @@ mod tests {
 
     #[test]
     fn history_spans_every_script() {
-        // History is the one thing that IS global: it is a record across runs,
-        // which is why it moved out of the per-run view.
+        // History is global on purpose: it is a record across runs.
         let mut state = AppState::new();
         for name in ["tools/a.py", "tools/b.py"] {
             state.history.push(HistoryEntry {

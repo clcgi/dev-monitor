@@ -6,21 +6,12 @@ mod components;
 mod screens;
 mod services;
 
-/// The Tailwind build output. Baked in rather than loaded at runtime so
-/// `cargo run` needs nothing but Rust -- Node builds this file, it does not run
-/// the app. Regenerate with `npm run build:css` after changing markup or
-/// `input.css`.
+use components::update_banner::UpdateUi;
+
+/// The Tailwind build output.
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
 
-/// The four palettes. The strings are the body classes `input.css` defines; a
-/// name here with no matching block there silently renders the default, so the
-/// two lists are one contract.
-///
-/// THE PICKER IS NOT MOUNTED at present -- see `DEFAULT_THEME`. This list and
-/// `components::theme_picker` are kept because the palettes themselves are
-/// still live: removing them would mean deleting four working CSS blocks to
-/// re-add them later, and the last time this app had unreachable palettes it
-/// was because nothing selected one, not because they were gone.
+/// The four palettes.
 pub const THEMES: [(&str, &str); 4] = [
     ("theme-electric-autumn", "Electric Autumn"),
     ("theme-warm-editorial", "Warm Editorial"),
@@ -29,9 +20,6 @@ pub const THEMES: [(&str, &str); 4] = [
 ];
 
 /// The palette the app starts in, and currently the only one it uses.
-///
-/// Must match one of `THEMES`; a string with no matching block in `input.css`
-/// renders the default palette with no error anywhere.
 pub const DEFAULT_THEME: &str = "theme-seasonless-blue";
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -63,14 +51,8 @@ fn main() {
 fn App() -> Element {
     let mut system_is_light = use_signal(|| dark_light::detect() != dark_light::Mode::Dark);
     // None follows the OS; Some(_) is the user's explicit choice.
-    //
-    // THIS HAS TO BE A TRISTATE. The poll below rewrites the mode every two
-    // seconds, so a plain bool would be overwritten within a tick of anyone
-    // choosing light on a dark machine -- the toggle would appear to do
-    // nothing, intermittently, which is the worst way for a control to fail.
     let mut theme_preference = use_signal(|| Option::<bool>::None);
-    // The palette was unreachable before: the CSS defined four, and nothing in
-    // the app ever set the class that selects one.
+    // Must match a block in input.css, or the default palette renders silently.
     let theme = use_signal(|| DEFAULT_THEME.to_string());
     use_context_provider(|| theme);
 
@@ -81,14 +63,47 @@ fn App() -> Element {
                 tokio::task::spawn_blocking(|| dark_light::detect() != dark_light::Mode::Dark)
                     .await
                     .unwrap_or(*system_is_light.read());
-            // Written unconditionally: it records what the OS says, which is
-            // read only when the preference is None. An explicit choice is
-            // never touched here.
+            // Written unconditionally: it records what the OS says, which is read only.
             if detected != *system_is_light.read() {
                 system_is_light.set(detected);
             }
         }
     });
+
+    // One request at startup, never repeated.
+    let mut update = use_signal(|| UpdateUi::Hidden);
+    // Outlives the banner. The check runs once per process, so without this a
+    // user who misses the five seconds cannot reach Install again until restart.
+    let mut pending = use_signal(|| Option::<services::updates::Update>::None);
+    use_coroutine(move |_rx: UnboundedReceiver<()>| async move {
+        let Some(found) = services::updates::check().await else { return };
+        pending.set(Some(found.clone()));
+        update.set(UpdateUi::Offered(found));
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        // Only an untouched offer auto-hides. A download in flight, a failure, or
+        // an installer already handed over all outlive the five seconds.
+        if matches!(*update.read(), UpdateUi::Offered(_)) {
+            update.set(UpdateUi::Hidden);
+        }
+    });
+
+    // Download, then hand the file to the OS installer.
+    let install = move |u: services::updates::Update| {
+        update.set(UpdateUi::Downloading(u.clone()));
+        spawn(async move {
+            let Some(installer) = u.installer.clone() else {
+                update.set(UpdateUi::Failed(u, "no installer for this platform".into()));
+                return;
+            };
+            match services::updates::download(&installer).await {
+                Err(why) => update.set(UpdateUi::Failed(u, why)),
+                Ok(path) => match services::updates::launch(&path) {
+                    Err(why) => update.set(UpdateUi::Failed(u, why)),
+                    Ok(()) => update.set(UpdateUi::Handed(u)),
+                },
+            }
+        });
+    };
 
     // Auth reminder coroutine: every 12 hours
     let mut show_auth_reminder = use_signal(|| true); // Show on startup
@@ -109,35 +124,23 @@ fn App() -> Element {
 
     rsx! {
         // The stylesheet is RENDERED, not injected by script.
-        //
-        // It used to go in through `document::eval`, and that had two failure
-        // modes stacked on each other: the returned `Eval` future was dropped
-        // so only the last call of a loop survived, and the CSS was interpolated
-        // into a JS template literal where `.sm\:px-4` -- Tailwind's escaping for
-        // a variant -- was read as a backslash escape and arrived as `.sm:px-4`,
-        // matching nothing. Neither produced an error; the UI simply rendered
-        // unstyled, which pointed at Tailwind rather than at the injector.
-        //
-        // A `style` element in the tree has neither problem: Dioxus puts the
-        // text in verbatim, there is no JavaScript in the path, and it exists
-        // before the first paint rather than one effect later.
         style { "{stylesheet}" }
 
         // The theme lives on a RENDERED wrapper, not on <body> set by script.
-        //
-        // `document::eval` was writing `document.body.className`, which meant
-        // the palette depended on a script running -- the same mechanism that
-        // had already failed silently for the stylesheet. As an attribute it is
-        // part of the tree: it cannot be dropped, and it is correct on the first
-        // paint rather than one effect later.
-        //
-        // `cdw-root` carries the legacy variable aliases; `theme-*` and `light`
-        // select the palette. h-screen so the wrapper fills the window, since
-        // the variables must be on an ancestor of everything that reads them.
         div {
-            class: "cdw-root {theme_class} h-screen",
+            // `relative` so the update banner can position against the window rather than.
+            class: "cdw-root {theme_class} relative h-screen",
+            components::update_banner::UpdateBanner {
+                ui: update.read().clone(),
+                current: services::updates::current_version().to_string(),
+                on_install: install,
+                on_open_page: move |u: services::updates::Update| { let _ = open::that(&u.url); },
+                on_dismiss: move |_| update.set(UpdateUi::Hidden),
+            }
             screens::main_window::MainWindow {
                 show_auth_reminder,
+                pending_update: pending.read().clone(),
+                on_show_update: move |u| update.set(UpdateUi::Offered(u)),
                 theme_preference: *theme_preference.read(),
                 system_is_light: *system_is_light.read(),
                 on_theme_change: move |pref| theme_preference.set(pref),

@@ -8,3 +8,4 @@ pub mod theme_picker;
 pub mod verdict_panel;
 pub mod arg_picker;
 pub mod theme_toggle;
+pub mod update_banner;

@@ -27,10 +27,6 @@ fn tools_dir() -> std::path::PathBuf {
 }
 
 /// An icon per category, so the narrow rail still distinguishes the groups.
-///
-/// Below `md` the sidebar collapses to icons and the group HEADINGS disappear
-/// with the labels -- without this every row would be one of two glyphs and the
-/// grouping would exist only in the layout.
 fn category_icon(category: &str) -> &'static str {
     match category {
         "Flows" => "ph-flow-arrow",
@@ -42,11 +38,6 @@ fn category_icon(category: &str) -> &'static str {
 }
 
 /// The language filter's three positions.
-///
-/// A SECOND AXIS over the same list, not a second level of grouping. A script
-/// has one category and one language; nesting them would produce eight groups
-/// of which most are empty at any moment, and the categories -- the useful
-/// division -- would each be split in two.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Language {
     All,
@@ -68,9 +59,7 @@ impl Language {
 pub fn Sidebar(props: SidebarProps) -> Element {
     let mut groups = use_signal(Vec::<(String, Vec<ScriptMeta>)>::new);
     let mut language = use_signal(|| Language::All);
-    // COLLAPSED, not expanded, is the set that is tracked. Everything starts
-    // open: a sidebar that opened closed would hide every script behind a click
-    // and look empty on first launch.
+    // COLLAPSED, not expanded, is the set that is tracked.
     let mut collapsed = use_signal(HashSet::<String>::new);
 
     use_effect(move || {
@@ -78,28 +67,20 @@ pub fn Sidebar(props: SidebarProps) -> Element {
     });
 
     let lang = *language.read();
-    // Filtered BEFORE the markup, not inside it. Skipping an item with `return`
-    // inside an `rsx!` loop is ambiguous -- depending on how the macro expands
-    // it either skips the item or returns from the whole component, and both
-    // type-check. Doing it here makes the intent unambiguous, and it also keeps
-    // the filter off the filesystem: `discover` is not re-run.
+    // Filtered before the markup: `return` inside an rsx loop is ambiguous.
     let visible: Vec<(String, Vec<ScriptMeta>)> = groups
         .read()
         .iter()
         .filter_map(|(category, list)| {
             let kept: Vec<ScriptMeta> =
                 list.iter().filter(|m| lang.matches(m)).cloned().collect();
-            // A group with nothing left is dropped entirely. An empty
-            // "Simulation (0)" under a Python filter tells the reader nothing
-            // they did not just ask for.
+            // A group with nothing left is dropped entirely.
             (!kept.is_empty()).then(|| (category.clone(), kept))
         })
         .collect();
 
     rsx! {
-        // RESPONSIVE: the fixed 260px inline width is gone. Below `md` the list
-        // collapses to an icon rail -- on a narrow window the sidebar previously
-        // took a quarter of the screen and left the log viewer unusable.
+        // RESPONSIVE: the fixed 260px inline width is gone.
         aside {
             class: "flex w-14 shrink-0 flex-col border-r border-edge bg-surface \
                     md:w-56 lg:w-64",
@@ -112,8 +93,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 i { class: "ph ph-list text-fg-faint md:hidden" }
             }
 
-            // The language filter. Icon-only at rail width, where the labels
-            // would not fit and the glyphs already carry the meaning.
+            // The language filter.
             div { class: "flex gap-1 px-2 pb-2 pt-1",
                 for (value, label, icon) in [
                     (Language::All, "All", "ph-list-dashes"),
@@ -143,9 +123,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 if visible.is_empty() {
                     div {
                         class: "hidden px-3 py-5 text-[11px] leading-relaxed text-fg-faint md:block",
-                        // The two empties are different and say so: nothing
-                        // found at all is a setup problem, nothing matching is
-                        // the filter the user just set.
+                        // The two empties are different and say so: nothing found at all is a setup.
                         if groups.read().is_empty() {
                             "No scripts found in tools/"
                         } else {
@@ -159,9 +137,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                         let key = category.clone();
                         rsx! {
                         div { key: "{category}", class: "mb-2",
-                            // The group heading. At rail width it becomes the
-                            // divider-plus-icon below, because a heading with no
-                            // room for its text is just a gap.
+                            // The group heading.
                             div {
                                 class: "hidden w-full cursor-pointer items-center gap-1.5 rounded \
                                         px-2 pb-1 pt-2 text-[10px] uppercase tracking-wider \
@@ -173,20 +149,16 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                         if !set.remove(&key) { set.insert(key.clone()); }
                                     }
                                 },
-                                // The caret points at what a click does: right
-                                // when closed, down when open.
+                                // The caret points at what a click does: right when closed, down when open.
                                 i {
                                     class: if is_collapsed { "ph ph-caret-right" } else { "ph ph-caret-down" },
                                 }
                                 i { class: "ph {category_icon(&category)}" }
                                 span { "{category}" }
-                                // The count stays visible when collapsed -- it is
-                                // the only thing left saying what is inside.
+                                // The count stays visible when collapsed -- it is the only thing left saying.
                                 span { class: "ml-auto opacity-60", "{list.len()}" }
                             }
-                            // At rail width the heading is a divider and an icon,
-                            // and it collapses too: the rows are the only content
-                            // there, so hiding them is the whole gesture.
+                            // At rail width the heading is a divider and an icon, and it collapses too.
                             div {
                                 class: "mx-2 mb-1 mt-2 flex cursor-pointer justify-center \
                                         border-t border-edge pt-2 text-fg-faint md:hidden",
@@ -205,9 +177,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                             for meta in list {
                                 div {
                                     key: "{meta.path}",
-                                    // border-l-2 on BOTH states, transparent when
-                                    // off, so selecting a row does not shift its
-                                    // contents by 2px.
+                                    // border-l-2 on BOTH states, transparent when off, so selecting a row does.
                                     class: if Some(&meta.path) == props.selected_script.as_ref() {
                                         "flex cursor-pointer items-center gap-2 rounded-md border-l-2 \
                                          border-brand bg-elevated px-2 py-2 justify-center md:justify-start"
@@ -216,9 +186,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                          border-transparent px-2 py-2 hover:bg-elevated justify-center \
                                          md:justify-start"
                                     },
-                                    // The summary in the tooltip: the row is too
-                                    // narrow for it and the file name alone does
-                                    // not say what a script proves.
+                                    // The summary in the tooltip: the row is too narrow for it and the file name.
                                     title: if meta.summary.is_empty() {
                                         "{meta.path}"
                                     } else {
@@ -229,12 +197,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                         move |_| props.on_select.call(m.clone())
                                     },
 
-                                    // The language glyph gives way to a spinner
-                                    // while this script runs. Replacing it rather
-                                    // than adding beside it: at rail width the
-                                    // glyph is the entire row, so an indicator
-                                    // appended after it would be off-screen
-                                    // exactly when the sidebar is narrowest.
+                                    // The language glyph gives way to a spinner while this script runs.
                                     if props.running_script.as_ref() == Some(&meta.path) {
                                         i { class: "ph ph-spinner ph-spin shrink-0 text-brand" }
                                     } else {
@@ -250,9 +213,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                         },
                                         "{meta.file_name()}"
                                     }
-                                    // A live dot at the trailing edge, so a run is
-                                    // visible even when the row is scrolled past
-                                    // its label.
+                                    // A live dot at the trailing edge, visible even past the label.
                                     if props.running_script.as_ref() == Some(&meta.path) {
                                         span {
                                             class: "ml-auto hidden size-1.5 shrink-0 animate-pulse \

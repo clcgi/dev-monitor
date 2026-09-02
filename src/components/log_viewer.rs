@@ -5,15 +5,7 @@ use crate::services::state::{LogMsg, StreamType};
 #[derive(Props, Clone, PartialEq)]
 pub struct LogViewerProps {
     pub logs: Vec<LogMsg>,
-    /// (nonce, line index) to scroll to.
-    ///
-    /// A SIGNAL, not a plain value, and that is load-bearing: `use_effect`
-    /// re-runs when a signal it READS changes, and a copied prop is not a
-    /// signal. Passed by value it would have been read once at mount and the
-    /// jump would never fire again.
-    ///
-    /// The nonce makes a second jump to the SAME line distinct, so clicking one
-    /// verdict twice scrolls twice.
+    /// (nonce, line index) to scroll to. A Signal, so the effect has a dependency.
     pub jump: Signal<Option<(u64, usize)>>,
 }
 
@@ -21,11 +13,7 @@ pub struct LogViewerProps {
 pub fn LogViewer(props: LogViewerProps) -> Element {
     let mut auto_scroll = use_signal(|| true);
     
-    // FOLLOW THE TAIL. `use_reactive` is what makes this fire on each new line:
-    // an effect re-runs when a SIGNAL it reads changes, and `logs_len` is a
-    // plain prop, not a signal. Written without it -- as this was -- the effect
-    // ran once at mount and then only when `auto_scroll` itself changed, so the
-    // pane silently stopped following output and had to be scrolled by hand.
+    // FOLLOW THE TAIL. `use_reactive` is what makes this fire on each new line.
     let logs_len = props.logs.len();
     use_effect(use_reactive((&logs_len,), move |(_len,)| {
         if *auto_scroll.read() {
@@ -40,9 +28,7 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
     let mut highlighted = use_signal(|| Option::<usize>::None);
     use_effect(move || {
         let Some((_nonce, index)) = *jump.read() else { return };
-        // AUTO-SCROLL OFF FIRST. The effect above follows the tail on every new
-        // line, so during a running suite it would drag the view straight back
-        // to the bottom and the jump would look like it did nothing.
+        // AUTO-SCROLL OFF FIRST. The effect above follows the tail on every new line.
         auto_scroll.set(false);
         highlighted.set(Some(index));
         let _ = eval(&format!(
@@ -52,8 +38,6 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
     });
 
     rsx! {
-        // The inline `style:` attributes are gone with the classes: they were
-        // doing layout the stylesheet could not express, and utilities can.
         div { class: "relative flex min-h-0 flex-1 flex-col",
 
             if !*auto_scroll.read() && logs_len > 0 {
@@ -73,9 +57,7 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
 
             div {
                 id: "log-viewer-scroll",
-                // font-mono and the tight leading are what made this read as a
-                // terminal; `break-all` keeps a long single-token line (a path,
-                // a base64 blob) from widening the pane instead of wrapping.
+                // font-mono and the tight leading are what made this read as a terminal.
                 class: "min-h-0 flex-1 overflow-y-auto rounded-lg border border-edge \
                         bg-app p-3 font-mono text-[11px] leading-relaxed",
                 onscroll: move |_evt| {
@@ -98,19 +80,14 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
                 } else {
                     for (idx, log) in props.logs.iter().enumerate() {
                         {
-                            // Only the COLOUR varies by stream; the row layout is
-                            // shared, so it stays on the element rather than being
-                            // repeated three times.
+                            // Only the colour varies by stream; the row layout is shared.
                             let tone = match log.stream {
                                 StreamType::Stdout => "text-fg-soft",
                                 StreamType::Stderr => "text-danger",
                                 StreamType::System => "text-info italic",
                             };
                             let time_str = log.timestamp.format("%H:%M:%S").to_string();
-                            // The marker that says where a jump landed. It stays
-                            // until the next jump: a highlight that faded on a
-                            // timer would be gone by the time someone finished
-                            // reading the line they asked for.
+                            // The marker that says where a jump landed.
                             let mark = if *highlighted.read() == Some(idx) {
                                 " -mx-1 rounded bg-brand/15 px-1 ring-1 ring-brand/40"
                             } else {
@@ -118,10 +95,6 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
                             };
                             rsx! {
                                 div {
-                                    // Addressable, so a jump has something to
-                                    // scroll to. Index-based because the log is
-                                    // append-only within a run: a line's position
-                                    // never changes once written.
                                     id: "log-line-{idx}",
                                     class: "flex gap-3 break-all py-0.5 {tone}{mark}",
                                     span { class: "shrink-0 text-fg-faint", "{time_str} " }

@@ -1,20 +1,11 @@
 # Build the desktop bundles and attach them to a GitHub Release.
-#
-# WHY THIS RUNS IN CI AND NOT ON A LAPTOP. The Windows bundle cannot be produced
-# from macOS: Dioxus desktop renders through the platform webview -- WebView2 on
-# Windows, WKWebView on macOS -- so each target needs its own OS to link
-# against. A matrix of two runners is the whole reason this file exists.
-#
-# Triggered by a TAG, never by a push to main. A release is a deliberate act,
-# and tying it to main would mint one on every merge.
 
 name: release
 
 on:
   push:
     tags: ['v*']
-  # Manual runs build the bundles WITHOUT publishing, so the packaging can be
-  # checked without spending a version number on it.
+  # Manual runs build the bundles WITHOUT publishing, so the packaging can be.
   workflow_dispatch:
 
 permissions:
@@ -23,8 +14,7 @@ permissions:
 jobs:
   bundle:
     strategy:
-      # Never cancel the other OS because one failed: knowing that macOS built
-      # and Windows did not is the useful outcome, and fail-fast hides it.
+      # Never cancel the other OS because one failed: knowing that macOS built.
       fail-fast: false
       matrix:
         include:
@@ -45,65 +35,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Caches the APP's compiled dependencies. It no longer has a CLI install
-      # to cache -- that is a download now -- but `dx bundle --release` still
-      # compiles dioxus, tokio and the rest into the workspace target dir, and
-      # that is the slow half of a cold run.
+      # Caches the APP's compiled dependencies.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
 
       # DOWNLOADED, NOT COMPILED, and that is the whole point of this step.
-      #
-      # `cargo install dioxus-cli` builds the CLI's entire dependency tree on
-      # the runner, and that tree is not ours to fix. Two failures came out of
-      # it on 2026-09-01, neither caused by anything in this repository:
-      #
-      #   swc_common 5.0.0 -> `serde::__private`, removed after serde 1.0.216
-      #   aws-lc-sys 0.23.1 -> "couldn't determine visual studio generator"
-      #
-      # The second is the one that settles the approach: aws-lc-sys needs CMake
-      # with an MSVC generator and NASM, so making it build means installing a C
-      # toolchain on the runner to compile a tool we only ever use as a binary.
-      # Dioxus publishes that binary. Use it.
-      #
-      # The archives hold a single executable at the root -- `dx` / `dx.exe` --
-      # verified against the v0.6.3 assets.
-      # DOWNLOADED, NOT COMPILED, and that is the whole point of this step.
-      #
-      # `cargo install dioxus-cli` builds the CLI's entire dependency tree on
-      # the runner, and that tree is not ours to fix. Two failures came out of
-      # it on 2026-09-01, neither caused by anything in this repository:
-      #
-      #   swc_common 5.0.0 -> `serde::__private`, removed after serde 1.0.216
-      #   aws-lc-sys 0.23.1 -> "couldn't determine visual studio generator"
-      #
-      # The second settles the approach: aws-lc-sys needs CMake with an MSVC
-      # generator and NASM, so making it build means installing a C toolchain on
-      # the runner to compile a tool we only ever use as a binary. Dioxus
-      # publishes that binary. It also took 15 minutes on macOS.
-      #
-      # THE CHECKSUM ASSET REPLACES THE EXTENSION, IT DOES NOT APPEND TO IT:
-      #
-      #   dx-aarch64-apple-darwin-v0.6.3.tar.gz     <- archive
-      #   dx-aarch64-apple-darwin-v0.6.3.sha256     <- checksum, NOT .tar.gz.sha256
-      #
-      # Getting that wrong cost a full run on 2026-09-01. The archive downloaded
-      # and the checksum 404'd, and because a 404 says nothing about which of
-      # two URLs produced it, it read as the release assets being unreachable
-      # from the runner. They were reachable the whole time.
-      #
-      # Fetched with `gh` rather than `curl`: it is preinstalled on
-      # GitHub-hosted runners, sends the job's token, and resolves assets BY
-      # NAME against the release. That last part is why it stays -- a name that
-      # matches nothing is now visible as a missing file below instead of an
-      # HTTP status with no subject.
-      #
-      # `gh release download` EXITS 0 WHEN A --pattern MATCHES NOTHING, as long
-      # as some other pattern matched, so the `ls` is the actual guard.
-      #
-      # The archives hold a single executable at the root -- `dx` / `dx.exe` --
-      # verified against the v0.6.3 assets.
       - name: Install the Dioxus CLI
         shell: bash
         env:
@@ -125,12 +62,7 @@ jobs:
             --clobber
           ls -la "$DX_ASSET" "$DX_SHA"
 
-          # CHECKSUM VERIFIED. This binary is fetched over the network and then
-          # executed, so an unverified download is an unverified executable --
-          # and a truncated one fails later, inside the bundler, as something
-          # that looks like a bundling bug.
-          # The checksum file names the archive, so this runs from the same
-          # directory the archive was downloaded into.
+          # CHECKSUM VERIFIED. This binary is fetched over the network and then.
           if command -v sha256sum >/dev/null; then
             sha256sum -c "$DX_SHA"
           else
@@ -145,26 +77,14 @@ jobs:
           esac
           chmod +x "$DX_BIN"/dx* || true
 
-          # TRANSLATED TO A NATIVE PATH ON WINDOWS. This step runs in Git Bash,
-          # where $HOME is `/c/Users/runneradmin` -- a POSIX path PowerShell
-          # cannot resolve. Later steps run in pwsh, the default shell on
-          # windows runners, so writing the POSIX form to GITHUB_PATH put an
-          # entry there that only bash could use: `dx` was on PATH for a bash
-          # step and missing for the bundle step, which failed with "The term
-          # 'dx' is not recognized" as though it had never been installed.
+          # TRANSLATED TO A NATIVE PATH ON WINDOWS. This step runs in Git Bash, where.
           if command -v cygpath >/dev/null; then
             DX_BIN="$(cygpath -w "$DX_BIN")"
           fi
           echo "adding to PATH: $DX_BIN"
           echo "$DX_BIN" >> "$GITHUB_PATH"
 
-      # NO `shell:` HERE, DELIBERATELY. This runs in the job's DEFAULT shell --
-      # pwsh on windows runners -- which is the shell the bundle step uses. The
-      # previous version forced bash, so it confirmed `dx` was reachable from a
-      # shell nothing else used and passed while the bundle step could not find
-      # the binary at all. A guard that checks a different environment from the
-      # one it is guarding is worse than no guard: it converts a clear failure
-      # into a confusing one further down.
+      # NO `shell:` HERE, DELIBERATELY. This runs in the job's DEFAULT shell.
       - name: Check dx runs, in the shell the bundle will use
         run: dx --help
 
@@ -172,59 +92,58 @@ jobs:
         with:
           node-version: '20'
 
-      # assets/tailwind.css IS committed -- the app builds with nothing but
-      # Rust, by design. It is rebuilt here anyway so a release can never ship a
-      # stylesheet that disagrees with the markup in the same commit, which is a
-      # difference nothing else would report.
+      # assets/tailwind.css IS committed -- the app builds with nothing but Rust.
       - name: Rebuild the stylesheet
         run: |
           npm ci
           npm run build:css
 
-      # `dmg` produces a .dmg, `nsis` produces an .exe -- verified against the
-      # PackageType enum in dioxus-cli 0.6.3. `msi` is the other Windows option
-      # and is deliberately not used: NSIS gives a plain installer executable,
-      # which is what people expect behind a "download for Windows" link.
-      #
-      # --out-dir makes the destination OURS. Without it the bundle lands in a
-      # CLI-version-dependent path (`dist/`, later `target/dx/<name>/bundle/`),
-      # and a wrong guess fails as "no files found" -- which reads as a build
-      # that produced nothing rather than a path that moved.
+      # `dmg` produces a .dmg, `nsis` an .exe. Verified against dioxus-cli 0.6.3.
       - name: Bundle
         run: dx bundle --release --platform desktop --package-types ${{ matrix.package }} --out-dir bundle
 
-      # Searched under our own --out-dir first, then the whole tree as a
-      # fallback, because the CLI copies into out-dir but has not always done so
-      # for every package type. Then ASSERTED: a release job that uploads
-      # nothing and still goes green is the failure this whole file exists to
-      # avoid, and an empty Release page is only discovered by a user.
-      - name: Collect the bundles
+      # One artifact per job. An earlier version also searched `target/`, which on
+      # Windows holds an .exe for every build script, and attached 40 files to the
+      # Release.
+      - name: Collect the bundle
         shell: bash
         run: |
+          set -euo pipefail
+          case "${{ matrix.package }}" in
+            dmg)  ext=dmg ;;
+            nsis) ext=exe ;;
+            msi)  ext=msi ;;
+            *)    echo "::error::unhandled package type ${{ matrix.package }}"; exit 1 ;;
+          esac
+
+          echo "--- everything under bundle/ ---"
+          find bundle -type f 2>/dev/null | head -40 || true
+
+          # The bundler stages the RAW APPLICATION EXECUTABLE beside the
+          # installer, so on Windows `bundle/**/*.exe` matches both
+          # `dev-monitor.exe` and the NSIS installer. Prefer the package-type
+          # subdirectory the bundler writes (`bundle/nsis/`, `bundle/dmg/`),
+          # which holds only the finished installer, and fall back to a flat
+          # out-dir if a future CLI stops nesting.
           mkdir -p out
-          for root in bundle target dist; do
-            [ -d "$root" ] || continue
-            find "$root" -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) \
-              -exec cp -n {} out/ \; 2>/dev/null || true
+          for dir in "bundle/${{ matrix.package }}" bundle; do
+            [ -d "$dir" ] || continue
+            find "$dir" -maxdepth 1 -type f -name "*.${ext}" -exec cp {} out/ \; 2>/dev/null || true
+            [ -n "$(ls -A out)" ] && break
           done
+
           echo "--- collected ---"; ls -la out
-          if [ -z "$(ls -A out)" ]; then
-            echo "::error::dx bundle produced no ${{ matrix.package }} artifact"
-            echo "--- tree, to find where it went ---"
-            find bundle target dist -maxdepth 6 -type f \
-              \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.app' \) 2>/dev/null | head -40
+          count=$(ls -1 out | wc -l | tr -d ' ')
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no .${ext} found under bundle/"
             exit 1
           fi
-
-      # The artifact must be the RIGHT KIND. A macOS job that somehow uploaded
-      # only an .exe would still satisfy "something was produced".
-      - name: Check the expected extension is present
-        shell: bash
-        run: |
-          case "${{ matrix.package }}" in
-            dmg)  ls out/*.dmg >/dev/null 2>&1 || { echo "::error::no .dmg"; exit 1; } ;;
-            nsis) ls out/*.exe >/dev/null 2>&1 || { echo "::error::no .exe"; exit 1; } ;;
-          esac
+          # More than one means something that is not the installer matched, and
+          # it would ship to the Release page.
+          if [ "$count" -ne 1 ]; then
+            echo "::error::expected exactly one .${ext}, found ${count}"
+            exit 1
+          fi
           echo "ok: $(ls out)"
 
       - uses: actions/upload-artifact@v5
@@ -233,8 +152,7 @@ jobs:
           path: out/*
 
   publish:
-    # Only a tag publishes. A manual run stops after `bundle`, leaving the
-    # artifacts downloadable from the run page.
+    # Only a tag publishes.
     if: startsWith(github.ref, 'refs/tags/v')
     needs: bundle
     runs-on: ubuntu-latest

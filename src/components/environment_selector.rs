@@ -15,12 +15,7 @@ pub fn EnvironmentSelector(props: EnvSelectorProps) -> Element {
         div { class: "mb-4 flex flex-wrap gap-1.5",
             for env in envs.into_iter() {
                 button {
-                    // The old inline style referenced `--green`, `--text1` and
-                    // `--bg2` -- three variables that exist nowhere in the
-                    // stylesheet, so the SELECTED state was styled exactly like
-                    // the unselected one. Environment choice is a required step
-                    // here and there was no visual confirmation of it.
-                    class: if Some(env) == props.selected {
+                        class: if Some(env) == props.selected {
                         "rounded-full border border-brand bg-elevated px-3 py-1 font-mono \
                          text-[11px] text-fg"
                     } else {

@@ -9,6 +9,9 @@ use crate::services::process::ScriptRunner;
 #[derive(Props, Clone, PartialEq)]
 pub struct MainWindowProps {
     pub show_auth_reminder: Signal<bool>,
+    /// Set once a newer release is known, whether or not the banner is up.
+    pub pending_update: Option<crate::services::updates::Update>,
+    pub on_show_update: EventHandler<crate::services::updates::Update>,
     /// None follows the OS; Some(true) light, Some(false) dark.
     pub theme_preference: Option<bool>,
     pub system_is_light: bool,
@@ -23,28 +26,19 @@ pub enum ProcessCommand {
 #[component]
 pub fn MainWindow(mut props: MainWindowProps) -> Element {
     let mut state = use_signal(AppState::new);
-    // Open by default: the log pane is the reason this app exists, and a
-    // collapsed one on first launch reads as a run that produced nothing.
+    // Open by default: a collapsed log pane reads as a run that produced nothing.
     let mut logs_open = use_signal(|| true);
     let mut history_open = use_signal(|| false);
-    // (nonce, line index). The nonce is what makes a second jump to the SAME
-    // line fire again -- the prop would otherwise be unchanged and the
-    // effect would not run.
+    // (nonce, line index).
     let mut log_jump = use_signal(|| Option::<(u64, usize)>::None);
     let mut jump_nonce = use_signal(|| 0u64);
 
-    // A ONE-SECOND HEARTBEAT WHILE RUNNING, and it is not cosmetic. Nothing else
-    // re-renders during a wait: the app repaints when a log line arrives, and
-    // the two waits that matter most -- a KEDA cold start, a 10-second poll --
-    // produce no output at all. Without this the elapsed readings freeze at
-    // whatever the last line left them, at the exact moment a user most needs to
-    // know time is still passing.
+    // A ONE-SECOND HEARTBEAT WHILE RUNNING, and it is not cosmetic.
     let mut tick = use_signal(|| 0u64);
     use_coroutine(move |_rx: UnboundedReceiver<()>| async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            // Only while something is running, so an idle app is not repainting
-            // once a second forever.
+            // Only while running, so an idle app does not repaint once a second forever.
             if state.read().running_script.is_some() {
                 let n = *tick.read();
                 tick.set(n.wrapping_add(1));
@@ -52,8 +46,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
         }
     });
     
-    // We store logs directly in state now, but we'll use a signal for preflight checks
-    
+    // We store logs directly in state now, but we'll use a signal for preflight.
     
     // Coroutine to handle script execution
     let process_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<ProcessCommand>| async move {
@@ -64,11 +57,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 cmd = rx.next() => {
                     match cmd {
                         Some(ProcessCommand::Run { script, env, args }) => {
-                            // `script` is captured for the whole run and every
-                            // write below is addressed to it. NOT to whatever is
-                            // selected: the user is free to look at another
-                            // script while this one runs, and its output must
-                            // still land in its own log.
+                            // `script` is captured for the whole run and every write below is addressed.
                             {
                                 let mut s = state.write();
                                 s.running_script = Some(script.clone());
@@ -82,8 +71,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                 entry.step_history.clear();
                                 entry.step_started = None;
                             }
-                            // The log this pointed into has just been cleared,
-                            // so the index now names a different line -- or none.
+                            // The log it pointed into was just cleared, so the index names a different line.
                             log_jump.set(None);
                             
                             state.write().entry(&script).logs.push(LogMsg {
@@ -106,11 +94,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                             Some(log_msg) = rx_logs.recv() => {
                                                 use crate::services::markers::{self, Marker};
                                                 match markers::parse(&log_msg.content) {
-                                                    // A new pass over the chain. simulate_upload.py
-                                                    // runs it twice to compare ingress routes, and
-                                                    // without this reset the stepper walks forward
-                                                    // and then appears to jump BACKWARDS -- which
-                                                    // reads as a fault rather than a second pass.
+                                                    // A new pass over the chain.
                                                     Some(Marker::Run(_)) => {
                                                         let mut s = state.write();
                                                         let e = s.entry(&script);
@@ -121,23 +105,14 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                     Some(Marker::Step(step)) => {
                                                         let mut s = state.write();
                                                         let e = s.entry(&script);
-                                                        // Restamped only on a CHANGE of stage. A
-                                                        // script that re-emits the same marker --
-                                                        // verify_ingestion prints one per evidenced
-                                                        // stage, and a poll loop may repeat one --
-                                                        // must not keep resetting the clock, or the
-                                                        // elapsed reading never leaves zero and says
-                                                        // nothing.
+                                                        // Restamped only on a CHANGE of stage.
                                                         if e.active_step.as_ref() != Some(&step) {
                                                             e.step_started = Some(Local::now());
                                                         }
                                                         e.active_step = Some(step.clone());
                                                         complete_up_to(&mut e.step_history, &step);
                                                     }
-                                                    // Completion does NOT move the cursor. A step
-                                                    // that finished is not the step now running,
-                                                    // and conflating the two is how a hung step
-                                                    // looks identical to a slow one.
+                                                    // Completion does NOT move the cursor.
                                                     Some(Marker::StepDone(step)) => {
                                                         let mut s = state.write();
                                                         let e = s.entry(&script);
@@ -146,20 +121,11 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                             e.step_history.push(step);
                                                         }
                                                     }
-                                                    // A verdict the script reached about ITSELF.
-                                                    // Kept alongside the exit code rather than
-                                                    // replacing it: flow_all runs six flows through
-                                                    // one exit code, so the code says the suite
-                                                    // failed and only these say which flow did.
+                                                    // A verdict the script reached about ITSELF. Kept alongside the exit code.
                                                     Some(Marker::Result { ok, label }) => {
                                                         state.write().entry(&script).verdicts.push(Verdict { label, ok });
                                                     }
-                                                    // A line that LOOKS like a marker but names
-                                                    // nothing known is surfaced, never dropped. A
-                                                    // typo in a script is otherwise indistinguishable
-                                                    // from a step that simply never ran -- which is
-                                                    // precisely the silent failure this parser exists
-                                                    // to end.
+                                                    // A line that LOOKS like a marker but names nothing known is surfaced, never.
                                                     None if markers::is_unrecognised(&log_msg.content) => {
                                                         state.write().entry(&script).logs.push(LogMsg {
                                                             timestamp: chrono::Local::now(),
@@ -221,9 +187,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                 let started = {
                                                     let e = s.entry(&script);
                                                     e.end_time = Some(end_time);
-                                                    // The stage clock stops with the process. A
-                                                    // finished run that kept counting would read
-                                                    // as one still waiting.
+                                                    // The stage clock stops with the process.
                                                     e.step_started = None;
                                                     e.status = final_status.clone();
                                                     e.logs.push(LogMsg {
@@ -265,8 +229,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                             if let Some(mut p) = child_proc.take() {
                                 let _ = p.kill().await;
                             }
-                            // Addressed to whatever is RUNNING, which need not be
-                            // what is selected -- the user may have moved on.
+                            // Addressed to whatever is RUNNING, which need not be what is selected.
                             let mut s = state.write();
                             if let Some(path) = s.running_script.take() {
                                 let e = s.entry(&path);
@@ -285,11 +248,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     rsx! {
         div { class: "flex h-screen flex-col",
             
-            // Topbar
-            // Converted to utilities. RESPONSIVE: the subtitle is dropped below
-            // `sm` and the repo name truncates rather than pushing the picker
-            // off-screen -- the window is resizable and had no breakpoint at all
-            // before (the whole stylesheet contained zero @media queries).
+            // Topbar Converted to utilities.
             header {
                 class: "flex shrink-0 items-center gap-3 border-b border-edge bg-surface \
                         px-3 py-2.5 sm:gap-4 sm:px-4",
@@ -301,13 +260,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 }
                 // Pushes the controls to the trailing edge at every width.
                 div { class: "ml-auto" }
-                // The palette picker is deliberately NOT mounted. The four
-                // palettes and `components::theme_picker` are kept intact --
-                // see DEFAULT_THEME in main.rs -- so restoring it is one line
-                // here rather than four CSS blocks and a component.
-                // History moved off the run view entirely: it is a record
-                // ACROSS runs and was competing for height with the stepper and
-                // the log pane, both of which describe the run in front of you.
+                // The palette picker is deliberately NOT mounted.
                 button {
                     r#type: "button",
                     title: "Execution history",
@@ -324,6 +277,18 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                         }
                     }
                 }
+                // Only shown when an update exists, so it is not permanent chrome.
+                if let Some(u) = props.pending_update.clone() {
+                    button {
+                        r#type: "button",
+                        title: "Version {u.version} is available",
+                        class: "flex items-center gap-1.5 rounded-md border border-brand \
+                                bg-brand/15 px-2.5 py-1.5 text-brand hover:bg-brand/25",
+                        onclick: move |_| props.on_show_update.call(u.clone()),
+                        i { class: "ph-fill ph-arrow-circle-up text-base" }
+                        span { class: "hidden text-xs sm:inline", "Update" }
+                    }
+                }
                 crate::components::theme_toggle::ThemeToggle {
                     preference: props.theme_preference,
                     system_is_light: props.system_is_light,
@@ -337,28 +302,16 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 on_close: move |_| history_open.set(false),
             }
 
-            // Body
-            // min-h-0 is what lets the log pane scroll instead of pushing
-            // the window taller: a flex child defaults to min-height:auto.
+            // Body min-h-0 is what lets the log pane scroll instead of pushing the window.
             div { class: "flex min-h-0 flex-1",
                 Sidebar {
                     selected_script: state.read().selected_script.clone(),
-                    // Which script is running, so the sidebar can say so on the
-                    // row itself. Without it the only running indicator is on
-                    // the main page, and the sidebar -- the thing a user looks
-                    // at to pick the next script -- gives no sign a run is in
-                    // progress.
+                    // Which script is running, so the sidebar can say so on the row itself.
                     running_script: state.read().running_script.clone(),
                     on_select: move |meta: crate::services::scripts::ScriptMeta| {
                         // NOTHING IS CLEARED HERE ANY MORE, and that is the fix.
-                        // This used to wipe the logs, stepper and verdicts --
-                        // which belonged to a run that may still have been going,
-                        // whose output then kept arriving into the newly selected
-                        // script's view. Selecting is now purely a change of what
-                        // is displayed.
                         let mut s = state.write();
-                        // First touch seeds the entry, so its saved flags exist
-                        // before the picker reads them.
+                        // First touch seeds the entry, so its saved flags exist before the picker.
                         let defaults: Vec<String> = meta
                             .args
                             .iter()
@@ -373,8 +326,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                         s.selected_script = Some(meta.path.clone());
                         s.selected_meta = Some(meta);
                         drop(s);
-                        // The jump index points into the log of whatever was
-                        // shown before, which is a different list now.
+                        // The jump index points into the log shown before, which is a different list now.
                         log_jump.set(None);
                     },
                 }
@@ -384,8 +336,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     on_env_select: move |env| {
                         state.write().selected_env = Some(env);
                     },
-                    // Read so this component re-renders on the heartbeat, which
-                    // is what advances the elapsed readings during a silent wait.
+                    // Read so this component re-renders on the heartbeat, which is what advances.
                     tick: *tick.read(),
                     logs_open: *logs_open.read(),
                     log_jump,
@@ -394,14 +345,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                         logs_open.set(!open);
                     },
                     on_jump_to_run: move |label: String| {
-                        // The `[CDW_RUN: label]` line the flow prints at its own
-                        // start, so the jump lands at the BEGINNING of that run
-                        // rather than on its verdict at the end -- the verdict is
-                        // what was just clicked, and its context is above it.
-                        //
-                        // The LAST match wins: re-running a suite appends a
-                        // second copy of every run to the same log, and the one
-                        // a fresh verdict refers to is the most recent.
+                        // The `[CDW_RUN: label]` line the flow prints at its own start, so the jump.
                         let needle = format!("[CDW_RUN: {label}]");
                         let found = state
                             .read()
@@ -410,18 +354,13 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                             .iter()
                             .rposition(|l| l.content.contains(&needle));
                         if let Some(index) = found {
-                            // Opened, because a jump into a collapsed pane
-                            // silently does nothing.
+                            // Opened, because a jump into a collapsed pane silently does nothing.
                             logs_open.set(true);
                             let nonce = *jump_nonce.read() + 1;
                             jump_nonce.set(nonce);
                             log_jump.set(Some((nonce, index)));
                         } else {
-                            // Cloned out of the read borrow BEFORE writing: an
-                            // `if let` over `state.read()` holds the borrow for
-                            // the whole block, and the write inside it panics at
-                            // runtime rather than failing to compile in a way
-                            // that names the cause.
+                            // Cloned out of the read borrow BEFORE writing: an `if let` over.
                             let selected = state.read().selected_script.clone();
                             let Some(path) = selected else { return };
                             state.write().entry(&path).logs.push(LogMsg {
@@ -464,8 +403,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 div {
                     class: "fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4",
                     div {
-                        // w-full + max-w-md instead of a fixed 460px: the dialog
-                        // no longer overflows a narrow window.
+                        // w-full + max-w-md instead of a fixed 460px: the dialog no longer overflows.
                         class: "flex max-h-[84vh] w-full max-w-md flex-col overflow-hidden \
                                 rounded-xl border border-edge bg-surface",
                         div {
@@ -501,15 +439,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     }
 }
 
-
 /// Mark every linear step BEFORE `step` as completed.
-///
-/// A run that starts partway along the chain -- `run_against_dev.py` writes
-/// straight to `raw` and skips landing entirely -- would otherwise leave every
-/// earlier step showing as pending forever, which reads as "those stages
-/// failed" rather than "this tool does not do those stages".
-///
-/// Exception zones have no position on the chain, so they complete nothing.
 fn complete_up_to(
     history: &mut Vec<crate::services::state::WorkflowStep>,
     step: &crate::services::state::WorkflowStep,
