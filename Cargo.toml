@@ -1,6 +1,6 @@
 [package]
 name = "dev-monitor"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 description = "Monitor and test DEV ingestion workflow"
 
@@ -30,3 +30,13 @@ split-debuginfo = "unpacked"
 # Dependencies never get debugged here, so drop their debug info entirely.
 [profile.dev.package."*"]
 debug = false
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

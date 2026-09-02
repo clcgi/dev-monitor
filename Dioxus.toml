@@ -10,5 +10,18 @@ identifier = "com.cdw.devmonitor"
 # Required by `dx bundle`; shown to whoever installs the app.
 publisher = "CDW"
 
+# Every platform picks what it needs from this list: .icns on macOS, .ico on
+# Windows, the PNGs for the window and the Linux desktop entry. Source is
+# assets/icon-full.jpeg, which is 1024x559 -- icons must be square, so it is
+# centre-cropped to the badge and masked to the circle so the corners are
+# transparent rather than a dark rectangle. Regenerate with tools/make-icons.sh.
+icon = [
+  "assets/icons/32x32.png",
+  "assets/icons/128x128.png",
+  "assets/icons/128x128@2x.png",
+  "assets/icons/icon.icns",
+  "assets/icons/icon.ico",
+]
+
 [web.app]
 title = "DEV Monitor"

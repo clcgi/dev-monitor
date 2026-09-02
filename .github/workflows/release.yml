@@ -99,7 +99,20 @@ jobs:
           npm run build:css
 
       # `dmg` produces a .dmg, `nsis` an .exe. Verified against dioxus-cli 0.6.3.
+      # AD-HOC SIGNED ON macOS. Apple Silicon refuses to execute an unsigned
+      # binary that came from the internet, and reports it as "DevMonitor.app is
+      # damaged and can't be opened" -- which reads as a corrupt download and
+      # sends people back to re-download a file that was never the problem.
+      #
+      # `-` is tauri-bundler's pseudo-identity for an ad-hoc signature. It costs
+      # nothing and needs no Apple account. It does NOT notarize: the first
+      # launch still has to be approved once, see the release notes.
+      #
+      # Ignored on Windows, so it stays unconditional rather than adding a
+      # matrix field that exists for one runner.
       - name: Bundle
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
         run: dx bundle --release --platform desktop --package-types ${{ matrix.package }} --out-dir bundle
 
       # One artifact per job. An earlier version also searched `target/`, which on
@@ -168,13 +181,24 @@ jobs:
           body: |
             ## Install
 
-            **macOS** — the `.dmg` is **unsigned**, so Gatekeeper refuses it on a
-            double-click with "damaged and can't be opened". That message is
-            wrong; the download is fine. Open it once with:
+            **macOS** — the app is ad-hoc signed but **not notarized**, so
+            macOS asks once. Open the `.dmg`, drag **DevMonitor** to
+            Applications, then either:
 
             ```
-            xattr -dr com.apple.quarantine /Applications/dev-monitor.app
+            xattr -dr com.apple.quarantine /Applications/DevMonitor.app
             ```
+
+            or launch it once and go to *System Settings → Privacy & Security*,
+            where a message about DevMonitor offers **Open Anyway**.
+
+            Run the command **after** copying to Applications — running it on
+            the copy inside the mounted disk image changes nothing, because the
+            image is read-only and you launch the copy.
+
+            If you see *"is damaged and can't be opened"*, that message is
+            misleading: the download is fine, macOS is refusing an app it cannot
+            verify.
 
             **Windows** — SmartScreen shows "unrecognised app" for the same
             reason. *More info* → *Run anyway*.

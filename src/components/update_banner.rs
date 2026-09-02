@@ -58,9 +58,9 @@ pub fn UpdateBanner(props: UpdateBannerProps) -> Element {
     let icon = if failed {
         "ph-fill ph-warning-circle text-lg text-danger"
     } else if busy {
-        "ph ph-spinner ph-spin text-lg text-brand"
+        "ph ph-spinner ph-spin text-lg text-accent"
     } else {
-        "ph-fill ph-arrow-circle-up text-lg text-brand"
+        "ph-fill ph-arrow-circle-up text-lg text-accent"
     };
 
     rsx! {
@@ -68,12 +68,12 @@ pub fn UpdateBanner(props: UpdateBannerProps) -> Element {
             class: "pointer-events-none absolute inset-x-0 top-0 z-50 flex justify-center px-3 pt-2",
             div {
                 class: "pointer-events-auto flex w-full max-w-xl items-center gap-3 rounded-lg \
-                        border border-brand bg-elevated px-3 py-2 shadow-lg animate-pop",
+                        border border-border-soft bg-neutral-200 dark:bg-neutral-800 px-3 py-2 shadow-lg animate-pop",
                 i { class: "{icon}" }
                 div { class: "min-w-0 flex-1 leading-tight",
                     div { class: "text-xs text-fg",
                         "Version "
-                        span { class: "font-semibold text-brand", "{update.version}" }
+                        span { class: "font-semibold text-accent", "{update.version}" }
                         " is available"
                     }
                     div {
@@ -87,8 +87,8 @@ pub fn UpdateBanner(props: UpdateBannerProps) -> Element {
                     button {
                         r#type: "button",
                         disabled: busy,
-                        class: "shrink-0 rounded-md border border-brand-deep bg-brand-deep px-2.5 \
-                                py-1 text-[11px] text-white hover:border-brand hover:bg-brand \
+                        class: "shrink-0 rounded-md border border-transparent bg-accent px-2.5 \
+                                py-1 text-[11px] text-white hover:opacity-90 \
                                 disabled:cursor-default disabled:opacity-50",
                         onclick: {
                             let u = update.clone();
@@ -101,8 +101,8 @@ pub fn UpdateBanner(props: UpdateBannerProps) -> Element {
                 // no installer, and some people would rather read the notes.
                 button {
                     r#type: "button",
-                    class: "shrink-0 rounded-md border border-edge px-2.5 py-1 text-[11px] \
-                            text-fg-soft hover:bg-active hover:text-fg",
+                    class: "shrink-0 rounded-md border border-border-soft px-2.5 py-1 text-[11px] \
+                            text-fg-muted hover:bg-hover hover:text-fg",
                     title: "Open the release page",
                     onclick: {
                         let u = update.clone();
@@ -112,7 +112,7 @@ pub fn UpdateBanner(props: UpdateBannerProps) -> Element {
                 }
                 button {
                     r#type: "button",
-                    class: "shrink-0 rounded p-1 text-fg-faint hover:bg-active hover:text-fg",
+                    class: "shrink-0 rounded p-1 text-fg-faint hover:bg-hover hover:text-fg",
                     title: "Dismiss",
                     onclick: move |_| props.on_dismiss.call(()),
                     i { class: "ph ph-x text-xs" }
