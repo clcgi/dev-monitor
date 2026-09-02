@@ -166,7 +166,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
         div {
             class: "relative mb-5 flex items-center justify-center overflow-x-auto rounded-lg \
                     border border-edge bg-surface px-4 py-6 sm:px-5 sm:py-8",
-            div { class: "flex w-full max-w-3xl items-center justify-center",
+            div { class: "flex min-w-full w-max items-center justify-center px-4",
                 for (idx, step) in all_steps.iter().enumerate() {
                     {render_node(step, idx, if is_zone { false } else { idx == current_idx })}
 
@@ -178,7 +178,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                             // THE SEGMENT BEING TRAVELLED. Exactly one connector is in flight at a time.
                             let in_flight = props.is_running && !done && idx == current_idx;
                             // Computed here rather than as an `if/else if` chain inside the attribute.
-                            const TRACK: &str = "z-[1] -mx-3 min-w-2 flex-1";
+                            const TRACK: &str = "z-[1] -mx-3 min-w-8 flex-1";
                             let line = if in_flight {
                                 // Thicker while travelling, so the band has room to read as a band.
                                 format!(

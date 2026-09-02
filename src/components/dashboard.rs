@@ -99,7 +99,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                     // The header stays put; only the controls below it scroll.
                     div { class: "flex shrink-0 flex-col gap-1",
                         div { class: "flex items-center gap-2",
-                            div { class: "flex-1 truncate text-[15px] font-semibold text-fg",
+                            div { class: "flex-1 truncate text-lg font-semibold text-white",
                                 "{script_name}" }
                             div { class: "flex shrink-0 items-center text-[11px] uppercase \
                                           tracking-wider {status_class}",
