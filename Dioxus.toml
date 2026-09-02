@@ -20,6 +20,8 @@ icon = [
 
 [bundle.macos]
 signing_identity = "-"
+files = {}
+hardened_runtime = false
 
 [web.app]
 title = "DEV Monitor"

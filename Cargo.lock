@@ -813,7 +813,7 @@ checksum = "21d8ad60dd5b13a4ee6bd8fa2d5d88965c597c67bce32b5fc49c94f55cb50810"
 
 [[package]]
 name = "dev-monitor"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "dark-light",
