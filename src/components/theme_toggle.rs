@@ -1,5 +1,3 @@
-//! Dark/light toggle.
-
 use dioxus::prelude::*;
 
 #[derive(Props, Clone, PartialEq)]
@@ -15,17 +13,19 @@ pub struct ThemeToggleProps {
 pub fn ThemeToggle(props: ThemeToggleProps) -> Element {
     // The mode in EFFECT, whether or not it was chosen.
     let is_light = props.preference.unwrap_or(props.system_is_light);
-    let (icon, label) = if is_light { ("ph-sun", "Light") } else { ("ph-moon", "Dark") };
+    let icon = if is_light { "ph-sun" } else { "ph-moon" };
 
     rsx! {
         button {
             r#type: "button",
             // The tooltip carries BOTH the current state and what a click does.
             title: if is_light { "Light — click for dark" } else { "Dark — click for light" },
-            class: "flex items-center gap-2 rounded-full border border-white/20 bg-black/40 px-3 py-1.5 text-white/80 transition-colors hover:bg-black/60 hover:text-white focus:outline-none",
+            // The nav-link idiom its neighbours use: the bar is dark in both
+            // themes, so its controls are white-on-dark rather than a themed pill.
+            class: "text-nav-link text-white/80 hover:text-white transition-colors \
+                    flex items-center gap-1",
             onclick: move |_| props.on_change.call(Some(!is_light)),
-            i { class: "ph {icon} text-base" }
-            span { class: "hidden text-xs sm:inline", "{label}" }
+            i { class: "ph {icon} text-sm" }
         }
     }
 }

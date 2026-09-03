@@ -1,5 +1,3 @@
-//! Palette selector.
-
 use crate::THEMES;
 use dioxus::prelude::*;
 

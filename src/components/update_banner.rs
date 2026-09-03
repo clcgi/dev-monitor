@@ -1,5 +1,3 @@
-//! "A newer version is available", shown briefly at the top of the window.
-
 use dioxus::prelude::*;
 
 use crate::services::updates::Update;

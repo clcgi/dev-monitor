@@ -42,8 +42,8 @@ pub fn Dashboard(props: DashboardProps) -> Element {
 
     let (status_str, status_class, dot_class) = match status {
         ScriptStatus::Idle => ("Idle", "text-fg-faint", "bg-fg-faint"),
-        ScriptStatus::Running => ("Running", "text-info", "bg-info animate-pulse"),
-        ScriptStatus::Succeeded => ("Succeeded", "text-brand", "bg-brand"),
+        ScriptStatus::Running => ("Running", "text-accent", "bg-accent animate-pulse"),
+        ScriptStatus::Succeeded => ("Succeeded", "text-accent", "bg-accent"),
         ScriptStatus::Failed(_) => ("Failed", "text-danger", "bg-danger"),
         ScriptStatus::Cancelled => ("Cancelled", "text-warn", "bg-warn"),
         ScriptStatus::AppError(_) => ("App Error", "text-danger", "bg-danger"),
@@ -192,6 +192,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                 is_running,
                                 is_failed,
                                 is_succeeded,
+                                catalog: state.catalog.clone(),
                             }
                         }
 

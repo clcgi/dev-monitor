@@ -21,6 +21,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 # shelling out to `open`/`start` per platform, which this crate is.
 open = "5"
 
+# The per-user config directory for steps.json.
+dirs = "5"
+
 # Shrink the debug target dir: keep file:line for readable backtraces, drop the
 # heavier variable/type debug info only a step-debugger needs, and none of us do.
 [profile.dev]

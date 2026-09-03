@@ -1,27 +1,22 @@
-# Build the desktop bundles and attach them to a GitHub Release.
-
 name: release
 
 on:
   push:
     tags: ['v*']
-  # Manual runs build the bundles WITHOUT publishing, so the packaging can be.
   workflow_dispatch:
 
 permissions:
-  contents: write        # required to create the release and upload assets
+  contents: write
 
 jobs:
   bundle:
     strategy:
-      # Never cancel the other OS because one failed: knowing that macOS built.
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             package: dmg
             artifact: dev-monitor-macos
-            # macos-latest is Apple silicon.
             dx_asset: dx-aarch64-apple-darwin-v0.6.3.tar.gz
           - os: windows-latest
             package: nsis
@@ -35,12 +30,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Caches the APP's compiled dependencies.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
 
-      # DOWNLOADED, NOT COMPILED, and that is the whole point of this step.
+      # Downloaded, not compiled: dioxus-cli pulls aws-lc-sys, which needs CMake
+      # and NASM on Windows.
       - name: Install the Dioxus CLI
         shell: bash
         env:
@@ -49,7 +44,8 @@ jobs:
           DX_ASSET: ${{ matrix.dx_asset }}
         run: |
           set -euo pipefail
-          # Strip .tar.gz or .zip, then add .sha256 -- see the note above.
+          # The checksum asset REPLACES the extension (...v0.6.3.sha256), and `gh`
+          # exits 0 when a --pattern matches nothing -- so the `ls` is the guard.
           DX_SHA="${DX_ASSET%.tar.gz}"
           DX_SHA="${DX_SHA%.zip}.sha256"
           echo "archive:  $DX_ASSET"
@@ -62,7 +58,6 @@ jobs:
             --clobber
           ls -la "$DX_ASSET" "$DX_SHA"
 
-          # CHECKSUM VERIFIED. This binary is fetched over the network and then.
           if command -v sha256sum >/dev/null; then
             sha256sum -c "$DX_SHA"
           else
@@ -77,14 +72,14 @@ jobs:
           esac
           chmod +x "$DX_BIN"/dx* || true
 
-          # TRANSLATED TO A NATIVE PATH ON WINDOWS. This step runs in Git Bash, where.
+          # pwsh cannot resolve Git Bash's /c/Users/... form, and later steps use it.
           if command -v cygpath >/dev/null; then
             DX_BIN="$(cygpath -w "$DX_BIN")"
           fi
           echo "adding to PATH: $DX_BIN"
           echo "$DX_BIN" >> "$GITHUB_PATH"
 
-      # NO `shell:` HERE, DELIBERATELY. This runs in the job's DEFAULT shell.
+      # No `shell:` -- must match Bundle's, or it guards nothing.
       - name: Check dx runs, in the shell the bundle will use
         run: dx --help
 
@@ -92,21 +87,17 @@ jobs:
         with:
           node-version: '20'
 
-      # assets/tailwind.css IS committed -- the app builds with nothing but Rust.
+      # Rebuilt so a release cannot ship CSS that disagrees with its markup.
       - name: Rebuild the stylesheet
         run: |
           npm ci
           npm run build:css
 
-      # `dmg` produces a .dmg, `nsis` an .exe. Verified against dioxus-cli 0.6.3.
-      # Signing is configured in Dioxus.toml, NOT here: dx reads bundler settings
-      # from that file and ignores APPLE_SIGNING_IDENTITY entirely.
+      # Signing lives in Dioxus.toml; dx ignores APPLE_SIGNING_IDENTITY.
       - name: Bundle
         run: dx bundle --release --platform desktop --package-types ${{ matrix.package }} --out-dir bundle
 
-      # One artifact per job. An earlier version also searched `target/`, which on
-      # Windows holds an .exe for every build script, and attached 40 files to the
-      # Release.
+      # One artifact per job. Searching target/ once attached 40 files.
       - name: Collect the bundle
         shell: bash
         run: |
@@ -121,12 +112,8 @@ jobs:
           echo "--- everything under bundle/ ---"
           find bundle -type f 2>/dev/null | head -40 || true
 
-          # The bundler stages the RAW APPLICATION EXECUTABLE beside the
-          # installer, so on Windows `bundle/**/*.exe` matches both
-          # `dev-monitor.exe` and the NSIS installer. Prefer the package-type
-          # subdirectory the bundler writes (`bundle/nsis/`, `bundle/dmg/`),
-          # which holds only the finished installer, and fall back to a flat
-          # out-dir if a future CLI stops nesting.
+          # The raw executable sits beside the installer, so any *.exe matches
+          # two files. The package-type subdirectory holds only the installer.
           mkdir -p out
           for dir in "bundle/${{ matrix.package }}" bundle; do
             [ -d "$dir" ] || continue
@@ -140,16 +127,21 @@ jobs:
             echo "::error::no .${ext} found under bundle/"
             exit 1
           fi
-          # More than one means something that is not the installer matched, and
-          # it would ship to the Release page.
           if [ "$count" -ne 1 ]; then
             echo "::error::expected exactly one .${ext}, found ${count}"
             exit 1
           fi
+          orig="$(ls out)"
+          renamed="$(echo "$orig" | sed -E 's/_(aarch64|arm64|x64|x86_64|universal)//')"
+          if [ "$orig" != "$renamed" ]; then
+            mv "out/$orig" "out/$renamed"
+            echo "renamed: $orig -> $renamed"
+          fi
           echo "ok: $(ls out)"
 
-      # SIGNING, and the shape of this step is taken from the GitAgent project,
-      # which ships a notarized build of the same kind of app.
+      # dx leaves the bundle INVALIDLY signed: the linker ad-hoc signs the
+      # executable and declares a _CodeSignature the bundler never writes, which
+      # macOS reports as "damaged". Developer ID + notarization when secrets exist.
       - name: Sign the macOS bundle
         if: matrix.package == 'dmg'
         shell: bash
@@ -165,12 +157,9 @@ jobs:
           set -euo pipefail
           dmg="$(ls out/*.dmg)"
 
-          # All four, or none. A half-configured signing setup fails deep inside
-          # codesign or notarytool with a message about the missing piece and
-          # nothing about the configuration.
           REAL_SIGNING=false
           if [ -n "${SIGNING_IDENTITY:-}" ] && [ -n "${MACOS_CERTIFICATE:-}" ] \
-             && [ -n "${MACOS_CERTIFICATE_PWD:-}" ] && [ -n "${KEYCHAIN_PASSWORD:-}" ]; then
+            && [ -n "${MACOS_CERTIFICATE_PWD:-}" ] && [ -n "${KEYCHAIN_PASSWORD:-}" ]; then
             REAL_SIGNING=true
           fi
           echo "signing mode: $([ "$REAL_SIGNING" = true ] && echo 'Developer ID' || echo 'ad-hoc')"
@@ -190,18 +179,13 @@ jobs:
             rm "$RUNNER_TEMP/cert.p12"
           fi
 
-          # The dmg the bundler produced is read-only and compressed, so the app
-          # inside cannot be signed in place. Converting preserves what the
-          # bundler made -- the Applications symlink and the volume icon --
-          # which rebuilding the image by hand would lose.
+          # Read-only, so signing in place is impossible. Converting keeps the
+          # Applications symlink and volume icon a rebuilt image would lose.
           hdiutil convert "$dmg" -format UDRW -o "$RUNNER_TEMP/rw.dmg"
           hdiutil attach "$RUNNER_TEMP/rw.dmg" -nobrowse -mountpoint "$RUNNER_TEMP/rw"
           app="$(ls -d "$RUNNER_TEMP"/rw/*.app)"
 
-          # --deep so the nested binaries are covered. --options runtime and
-          # --timestamp ONLY with a real identity: the hardened runtime is what
-          # notarization requires, and a timestamp needs a certificate authority
-          # that an ad-hoc signature does not have.
+          # runtime + timestamp need a real certificate; ad-hoc has neither.
           if [ "$REAL_SIGNING" = true ]; then
             codesign --force --deep --options runtime --timestamp \
               --entitlements .github/macos-entitlements.plist \
@@ -222,8 +206,6 @@ jobs:
                && [ -n "${APP_STORE_ISSUER_ID:-}" ]; then
               P8="$RUNNER_TEMP/AuthKey_${APP_STORE_KEY_ID}.p8"
               echo "$APP_STORE_KEY" | base64 --decode > "$P8"
-              # Notarizing the DMG covers the app inside it by hash. Stapling
-              # writes the ticket into the file, so a first launch works offline.
               xcrun notarytool submit "$dmg" --key "$P8" \
                 --key-id "$APP_STORE_KEY_ID" --issuer "$APP_STORE_ISSUER_ID" --wait
               xcrun stapler staple "$dmg"
@@ -234,9 +216,7 @@ jobs:
             fi
           fi
 
-          # Re-verified from the FINAL artifact. Signing the app and repacking
-          # the image are two operations, and only the second produces what
-          # ships -- checking the first proves nothing about the file uploaded.
+          # Verified from the FINAL artifact: repacking happens after signing.
           hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$RUNNER_TEMP/final"
           codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP"/final/*.app
           hdiutil detach "$RUNNER_TEMP/final" -quiet
@@ -253,7 +233,6 @@ jobs:
           path: out/*
 
   publish:
-    # Only a tag publishes.
     if: startsWith(github.ref, 'refs/tags/v')
     needs: bundle
     runs-on: ubuntu-latest
@@ -305,4 +284,4 @@ jobs:
 
             Launched from anywhere else the sidebar reads "No scripts found in
             tools/". It also needs the Azure CLI on PATH and the repo's Python
-            venv, and it loads its icon font from the network.
+            venv.

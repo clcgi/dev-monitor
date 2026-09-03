@@ -1,8 +1,5 @@
 /* Tailwind v4 entry point for the DEV Monitor UI. BUILD:  npm run. */
 /* Phosphor icon font. */
-@import url("https://unpkg.com/@phosphor-icons/web@2.1.2/src/regular/style.css");
-@import url("https://unpkg.com/@phosphor-icons/web@2.1.2/src/bold/style.css");
-@import url("https://unpkg.com/@phosphor-icons/web@2.1.2/src/fill/style.css");
 
 @import "tailwindcss";
 

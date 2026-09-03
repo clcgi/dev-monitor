@@ -1,5 +1,3 @@
-//! The flags a script accepts, offered as toggles before it runs.
-
 use crate::services::scripts::ScriptArg;
 use dioxus::prelude::*;
 

@@ -8,8 +8,8 @@ mod services;
 
 use components::update_banner::UpdateUi;
 
-/// The Tailwind build output.
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
+const PHOSPHOR_CSS: &str = include_str!("../assets/phosphor.css");
 
 /// The four palettes.
 pub const THEMES: [(&str, &str); 4] = [
@@ -114,7 +114,7 @@ fn App() -> Element {
         }
     });
 
-    let stylesheet: &str = TAILWIND_CSS;
+    let stylesheet = use_hook(|| format!("{PHOSPHOR_CSS}\n{TAILWIND_CSS}"));
     let is_light = theme_preference.read().unwrap_or(*system_is_light.read());
     let theme_class = if is_light {
         format!("{} light", theme.read())

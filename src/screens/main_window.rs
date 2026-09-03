@@ -4,6 +4,8 @@ use futures_util::StreamExt;
 use crate::components::sidebar::Sidebar;
 use crate::components::dashboard::Dashboard;
 use crate::services::state::{AppState, Environment, ScriptStatus, LogMsg, StreamType, HistoryEntry, Verdict};
+use crate::services::marker_syntax::MarkerSyntax;
+use crate::services::steps::{StepCatalog, StepId};
 use crate::services::process::ScriptRunner;
 
 #[derive(Props, Clone, PartialEq)]
@@ -29,6 +31,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     // Open by default: a collapsed log pane reads as a run that produced nothing.
     let mut logs_open = use_signal(|| true);
     let mut history_open = use_signal(|| false);
+    let mut settings_open = use_signal(|| false);
     // (nonce, line index).
     let mut log_jump = use_signal(|| Option::<(u64, usize)>::None);
     let mut jump_nonce = use_signal(|| 0u64);
@@ -57,6 +60,12 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 cmd = rx.next() => {
                     match cmd {
                         Some(ProcessCommand::Run { script, env, args }) => {
+                            // Snapshotted for the whole run. Editing steps
+                            // mid-run must not change how this run's markers
+                            // resolve -- half a log parsed one way and half
+                            // another would be unreadable.
+                            let catalog = state.read().catalog.clone();
+                            let syntax = state.read().syntax.clone();
                             // `script` is captured for the whole run and every write below is addressed.
                             {
                                 let mut s = state.write();
@@ -93,7 +102,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                         tokio::select! {
                                             Some(log_msg) = rx_logs.recv() => {
                                                 use crate::services::markers::{self, Marker};
-                                                match markers::parse(&log_msg.content) {
+                                                match markers::parse(&log_msg.content, &catalog, &syntax) {
                                                     // A new pass over the chain.
                                                     Some(Marker::Run(_)) => {
                                                         let mut s = state.write();
@@ -110,13 +119,13 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                             e.step_started = Some(Local::now());
                                                         }
                                                         e.active_step = Some(step.clone());
-                                                        complete_up_to(&mut e.step_history, &step);
+                                                        complete_up_to(&mut e.step_history, &step, &catalog);
                                                     }
                                                     // Completion does NOT move the cursor.
                                                     Some(Marker::StepDone(step)) => {
                                                         let mut s = state.write();
                                                         let e = s.entry(&script);
-                                                        complete_up_to(&mut e.step_history, &step);
+                                                        complete_up_to(&mut e.step_history, &step, &catalog);
                                                         if !e.step_history.contains(&step) {
                                                             e.step_history.push(step);
                                                         }
@@ -126,7 +135,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                         state.write().entry(&script).verdicts.push(Verdict { label, ok });
                                                     }
                                                     // A line that LOOKS like a marker but names nothing known is surfaced, never.
-                                                    None if markers::is_unrecognised(&log_msg.content) => {
+                                                    None if markers::is_unrecognised(&log_msg.content, &catalog, &syntax) => {
                                                         state.write().entry(&script).logs.push(LogMsg {
                                                             timestamp: chrono::Local::now(),
                                                             stream: StreamType::System,
@@ -287,9 +296,44 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                         system_is_light: props.system_is_light,
                         on_change: move |pref| props.on_theme_change.call(pref),
                     }
+
+                    button {
+                        r#type: "button",
+                        title: "Settings",
+                        // The nav bar is dark in BOTH themes, so its controls are
+                        // white-on-dark rather than theme tokens.
+                        class: "text-nav-link text-white/80 hover:text-white transition-colors \
+                                flex items-center gap-1",
+                        onclick: move |_| settings_open.set(true),
+                        i { class: "ph ph-gear text-sm" }
+                    }
                 }
             }
             
+            if *settings_open.read() {
+                crate::components::settings_modal::SettingsModal {
+                    catalog: state.read().catalog.clone(),
+                    syntax: state.read().syntax.clone(),
+                    on_close: move |_| settings_open.set(false),
+                    on_save: move |(c, sy): (StepCatalog, MarkerSyntax)| {
+                        // Saved to disk AND applied in memory. A failed write is
+                        // reported but does not discard the edit -- the user
+                        // still gets what they asked for this session.
+                        if let Err(e) = crate::services::step_config::save(&c) {
+                            eprintln!("could not save steps.json: {e}");
+                        }
+                        if let Err(e) = crate::services::step_config::save_syntax(&sy) {
+                            eprintln!("could not save markers.json: {e}");
+                        }
+                        let mut st = state.write();
+                        st.catalog = c;
+                        st.syntax = sy;
+                        drop(st);
+                        settings_open.set(false);
+                    },
+                }
+            }
+
             crate::components::history::HistoryPanel {
                 history: state.read().history.clone(),
                 open: *history_open.read(),
@@ -301,6 +345,8 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 Sidebar {
                     selected_script: state.read().selected_script.clone(),
                     running_script: state.read().running_script.clone(),
+                    catalog: state.read().catalog.clone(),
+                    syntax: state.read().syntax.clone(),
                     on_select: move |meta: crate::services::scripts::ScriptMeta| {
                         let mut s = state.write();
                         let defaults: Vec<String> = meta
@@ -419,18 +465,18 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     }
 }
 
-/// Mark every linear step BEFORE `step` as completed.
-fn complete_up_to(
-    history: &mut Vec<crate::services::state::WorkflowStep>,
-    step: &crate::services::state::WorkflowStep,
-) {
-    use crate::services::state::WorkflowStep;
-    let Some(idx) = step.linear_index() else {
+/// Mark every chain step BEFORE `step` as completed.
+///
+/// A script may skip a stage it has no evidence for, so arriving at Raw means
+/// Landing happened whether or not it was announced.
+fn complete_up_to(history: &mut Vec<StepId>, step: &str, catalog: &StepCatalog) {
+    let Some(idx) = catalog.chain_index(step) else {
+        // A branch -- Quarantine, Rejected -- completes nothing before it.
         return;
     };
-    for earlier in WorkflowStep::LINEAR.iter().take(idx) {
-        if !history.contains(earlier) {
-            history.push(earlier.clone());
+    for earlier in catalog.chain().iter().take(idx) {
+        if !history.contains(&earlier.id) {
+            history.push(earlier.id.clone());
         }
     }
 }

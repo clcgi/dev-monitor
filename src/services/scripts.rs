@@ -1,9 +1,8 @@
-//! What the app knows about each script, and where it learns it.
-
 use std::fs;
 use std::path::Path;
 
-use crate::services::state::WorkflowStep;
+use crate::services::marker_syntax::{MarkerKind, MarkerSyntax};
+use crate::services::steps::{StepCatalog, StepId};
 
 /// A flag a script accepts, offered in the UI as a toggle.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -22,7 +21,7 @@ pub enum DeclaredSteps {
     /// `steps=none` -- explicitly touches no pipeline stage.
     None,
     /// The stages named, resolved.
-    Only(Vec<WorkflowStep>),
+    Only(Vec<StepId>),
 }
 
 /// One script, as the app understands it.
@@ -47,7 +46,7 @@ impl ScriptMeta {
     }
 
     /// The stages to draw, or `None` to draw the whole chain.
-    pub fn steps(&self) -> Option<&[WorkflowStep]> {
+    pub fn steps(&self) -> Option<&[StepId]> {
         match &self.declared_steps {
             DeclaredSteps::Unknown => None,
             DeclaredSteps::None => Some(&[]),
@@ -81,7 +80,12 @@ fn parse_pairs(payload: &str) -> Vec<(String, String)> {
 }
 
 /// Read one script's declaration.
-pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
+pub fn parse_meta(
+    path: &Path,
+    repo_relative: &str,
+    catalog: &StepCatalog,
+    syntax: &MarkerSyntax,
+) -> ScriptMeta {
     let mut meta = ScriptMeta {
         path: repo_relative.to_string(),
         category: "Other".to_string(),
@@ -96,7 +100,7 @@ pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
     };
 
     for line in text.lines().take(HEADER_LINES) {
-        if let Some(payload) = line.split_once("CDW_SCRIPT:").map(|(_, p)| p) {
+        if let Some(payload) = syntax.payload(line, MarkerKind::ScriptHeader) {
             for (key, value) in parse_pairs(payload) {
                 match key.as_str() {
                     "category" => meta.category = value,
@@ -106,9 +110,9 @@ pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
                         meta.declared_steps = if value.eq_ignore_ascii_case("none") {
                             DeclaredSteps::None
                         } else {
-                            let resolved: Vec<WorkflowStep> = value
+                            let resolved: Vec<StepId> = value
                                 .split(',')
-                                .filter_map(|s| WorkflowStep::from_marker(s.trim()))
+                                .filter_map(|s| catalog.resolve(s.trim()))
                                 .collect();
                             // A declaration whose every name was a typo is not a claim to touch nothing.
                             if resolved.is_empty() {
@@ -121,7 +125,7 @@ pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
                     _ => {}
                 }
             }
-        } else if let Some(payload) = line.split_once("CDW_ARG:").map(|(_, p)| p) {
+        } else if let Some(payload) = syntax.payload(line, MarkerKind::ArgHeader) {
             // `--flag  help text`: first token is the flag, the rest is prose.
             let payload = payload.trim();
             let (flag, help) = payload.split_once(char::is_whitespace).unwrap_or((payload, ""));
@@ -139,7 +143,11 @@ pub fn parse_meta(path: &Path, repo_relative: &str) -> ScriptMeta {
 }
 
 /// Every runnable script under `tools/`, grouped for the sidebar.
-pub fn discover(tools_dir: &Path) -> Vec<(String, Vec<ScriptMeta>)> {
+pub fn discover(
+    tools_dir: &Path,
+    catalog: &StepCatalog,
+    syntax: &MarkerSyntax,
+) -> Vec<(String, Vec<ScriptMeta>)> {
     let mut found: Vec<ScriptMeta> = Vec::new();
 
     if let Ok(entries) = fs::read_dir(tools_dir) {
@@ -155,7 +163,7 @@ pub fn discover(tools_dir: &Path) -> Vec<(String, Vec<ScriptMeta>)> {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            let meta = parse_meta(&path, &format!("tools/{name}"));
+            let meta = parse_meta(&path, &format!("tools/{name}"), catalog, syntax);
             if !meta.library {
                 found.push(meta);
             }
@@ -220,12 +228,12 @@ mod tests {
              # CDW_ARG: --apply  Actually delete.\n\
              print('hi')\n",
         );
-        let meta = parse_meta(&path, "tools/x.py");
+        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.category, "Flows");
         assert_eq!(meta.summary, "does a thing");
         assert_eq!(
             meta.declared_steps,
-            DeclaredSteps::Only(vec![WorkflowStep::Neo, WorkflowStep::Landing])
+            DeclaredSteps::Only(vec!["neo".into(), "landing".into()])
         );
         assert_eq!(meta.args.len(), 1);
         assert_eq!(meta.args[0].flag, "--apply");
@@ -237,7 +245,7 @@ mod tests {
         // fifteen scripts predate this header.
         let dir = tempdir("undeclared");
         let path = write(&dir, "old.sh", "#!/usr/bin/env bash\necho hello\n");
-        let meta = parse_meta(&path, "tools/old.sh");
+        let meta = parse_meta(&path, "tools/old.sh", &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.category, "Other");
         assert!(meta.args.is_empty());
         assert_eq!(meta.steps(), None, "unknown must not be reported as none");
@@ -247,10 +255,10 @@ mod tests {
     fn an_unknown_step_name_is_dropped_not_guessed() {
         let dir = tempdir("badstep");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=Neo,Sausages,Landing\n");
-        let meta = parse_meta(&path, "tools/x.py");
+        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(
             meta.declared_steps,
-            DeclaredSteps::Only(vec![WorkflowStep::Neo, WorkflowStep::Landing])
+            DeclaredSteps::Only(vec!["neo".into(), "landing".into()])
         );
     }
 
@@ -259,10 +267,10 @@ mod tests {
         // One matcher for both, so a name that works in a marker works here.
         let dir = tempdir("stepnames");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=event grid,CONTAINERAPPJOBS\n");
-        let meta = parse_meta(&path, "tools/x.py");
+        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(
             meta.declared_steps,
-            DeclaredSteps::Only(vec![WorkflowStep::EventGrid, WorkflowStep::ContainerAppJobs])
+            DeclaredSteps::Only(vec!["eventgrid".into(), "containerappjobs".into()])
         );
     }
 
@@ -272,7 +280,7 @@ mod tests {
         let dir = tempdir("deep");
         let body = format!("{}# CDW_SCRIPT: category=Flows\n", "x\n".repeat(HEADER_LINES + 5));
         let path = write(&dir, "x.py", &body);
-        assert_eq!(parse_meta(&path, "tools/x.py").category, "Other");
+        assert_eq!(parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default()).category, "Other");
     }
 
     #[test]
@@ -280,7 +288,7 @@ mod tests {
         // A positional would be appended as a bare word and change the target.
         let dir = tempdir("badarg");
         let path = write(&dir, "x.py", "# CDW_ARG: apply  no dash\n# CDW_ARG: --ok  fine\n");
-        let meta = parse_meta(&path, "tools/x.py");
+        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.args.len(), 1);
         assert_eq!(meta.args[0].flag, "--ok");
     }
@@ -290,7 +298,7 @@ mod tests {
         // The reason this state exists: reset_test_documents.py reaches no pipeline.
         let dir = tempdir("stepsnone");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=none\n");
-        let meta = parse_meta(&path, "tools/x.py");
+        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.declared_steps, DeclaredSteps::None);
         assert!(meta.has_no_steps());
         assert_eq!(meta.steps(), Some(&[][..]));
@@ -301,7 +309,7 @@ mod tests {
         // Unknown and none must not collapse: one draws the whole chain, the other.
         let dir = tempdir("unknownsteps");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: category=Flows\n");
-        let meta = parse_meta(&path, "tools/x.py");
+        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.declared_steps, DeclaredSteps::Unknown);
         assert!(!meta.has_no_steps());
         assert_eq!(meta.steps(), None);
@@ -312,7 +320,7 @@ mod tests {
         // Falling back to `none` would hide the stepper and look deliberate.
         let dir = tempdir("alltypos");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=Sausages,Custard\n");
-        assert_eq!(parse_meta(&path, "tools/x.py").declared_steps, DeclaredSteps::Unknown);
+        assert_eq!(parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default()).declared_steps, DeclaredSteps::Unknown);
     }
 
     #[test]
@@ -320,8 +328,8 @@ mod tests {
         let dir = tempdir("lang");
         let py = write(&dir, "a.py", "#\n");
         let sh = write(&dir, "b.sh", "#\n");
-        assert_eq!(parse_meta(&py, "tools/a.py").language(), "py");
-        assert_eq!(parse_meta(&sh, "tools/b.sh").language(), "sh");
+        assert_eq!(parse_meta(&py, "tools/a.py", &StepCatalog::defaults(), &MarkerSyntax::default()).language(), "py");
+        assert_eq!(parse_meta(&sh, "tools/b.sh", &StepCatalog::defaults(), &MarkerSyntax::default()).language(), "sh");
     }
 
     #[test]
@@ -329,7 +337,7 @@ mod tests {
         let dir = tempdir("lib");
         write(&dir, "cdw_client.py", "# a library\n");
         write(&dir, "flow_x.py", "# CDW_SCRIPT: category=Flows\n");
-        let names: Vec<String> = discover(&dir)
+        let names: Vec<String> = discover(&dir, &StepCatalog::defaults(), &MarkerSyntax::default())
             .into_iter()
             .flat_map(|(_, list)| list)
             .map(|m| m.path)
@@ -341,7 +349,7 @@ mod tests {
     fn a_script_may_declare_itself_a_library() {
         let dir = tempdir("selflib");
         let path = write(&dir, "helper.py", "# CDW_SCRIPT: library=true\n");
-        assert!(parse_meta(&path, "tools/helper.py").library);
+        assert!(parse_meta(&path, "tools/helper.py", &StepCatalog::defaults(), &MarkerSyntax::default()).library);
     }
 
     #[test]
@@ -351,7 +359,7 @@ mod tests {
         write(&dir, "b.py", "# CDW_SCRIPT: category=Flows\n");
         write(&dir, "c.py", "# no declaration\n");
         write(&dir, "d.py", "# CDW_SCRIPT: category=Verification\n");
-        let categories: Vec<String> = discover(&dir).into_iter().map(|(c, _)| c).collect();
+        let categories: Vec<String> = discover(&dir, &StepCatalog::defaults(), &MarkerSyntax::default()).into_iter().map(|(c, _)| c).collect();
         assert_eq!(categories, vec!["Flows", "Verification", "Maintenance", "Other"]);
     }
 
@@ -361,7 +369,7 @@ mod tests {
         for name in ["flow_3.py", "flow_1.py", "flow_2.py"] {
             write(&dir, name, "# CDW_SCRIPT: category=Flows\n");
         }
-        let (_, list) = discover(&dir).into_iter().next().unwrap();
+        let (_, list) = discover(&dir, &StepCatalog::defaults(), &MarkerSyntax::default()).into_iter().next().unwrap();
         let names: Vec<&str> = list.iter().map(|m| m.file_name()).collect();
         assert_eq!(names, vec!["flow_1.py", "flow_2.py", "flow_3.py"]);
     }

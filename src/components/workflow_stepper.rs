@@ -1,36 +1,32 @@
 use dioxus::prelude::*;
-use crate::services::state::WorkflowStep;
+use crate::services::steps::{StepCatalog, StepId};
 
 #[derive(Props, Clone, PartialEq)]
 pub struct WorkflowStepperProps {
     /// The stages to draw.
-    pub steps: Option<Vec<WorkflowStep>>,
+    pub steps: Option<Vec<StepId>>,
     /// Seconds spent in the CURRENT stage, when one is running.
     pub step_elapsed_s: Option<u64>,
-    pub active_step: Option<WorkflowStep>,
-    pub step_history: Vec<WorkflowStep>,
+    pub active_step: Option<StepId>,
+    pub step_history: Vec<StepId>,
     pub is_running: bool,
     pub is_failed: bool,
     pub is_succeeded: bool,
+    pub catalog: StepCatalog,
 }
 
 #[component]
 pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
-    // One definition of the chain, shared with the marker parser.
-    let all_steps: Vec<WorkflowStep> = match &props.steps {
-        Some(declared) => WorkflowStep::LINEAR
-            .iter()
-            .filter(|s| declared.contains(s))
-            .cloned()
-            .collect(),
-        None => WorkflowStep::LINEAR.to_vec(),
+    // In the CATALOG's order, not the order a script listed them: a declaration
+    // written out of order would draw a chain that runs backwards.
+    let chain: Vec<StepId> = props.catalog.chain().iter().map(|s| s.id.clone()).collect();
+    let all_steps: Vec<StepId> = match &props.steps {
+        Some(declared) => chain.iter().filter(|id| declared.contains(id)).cloned().collect(),
+        None => chain.clone(),
     };
-    // A declaration of only exception zones would leave this empty.
-    let all_steps = if all_steps.is_empty() {
-        WorkflowStep::LINEAR.to_vec()
-    } else {
-        all_steps
-    };
+    // A declaration naming only branches -- or only steps since removed --
+    // leaves this empty, and an empty track renders as a bare box.
+    let all_steps = if all_steps.is_empty() { chain } else { all_steps };
 
     let mut current_idx = 0;
     if let Some(active) = &props.active_step {
@@ -42,16 +38,17 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
     }
 
     // Special handling if current step is a zone like Quarantine/Rejected
-    let is_zone = matches!(
-        props.active_step,
-        Some(WorkflowStep::Quarantine) | Some(WorkflowStep::Rejected)
-    );
+    // A branch rather than a position on the chain.
+    let is_zone = props
+        .active_step
+        .as_ref()
+        .is_some_and(|id| props.catalog.chain_index(id).is_none());
 
     // Status is now a VALUE, not a class name.
     #[derive(PartialEq, Clone, Copy)]
     enum NodeState { Completed, Active, Failed, Zone, Pending }
 
-    let state_of = |step: &WorkflowStep, idx: usize| -> NodeState {
+    let state_of = |step: &StepId, idx: usize| -> NodeState {
         if let Some(active) = &props.active_step {
             if step == active {
                 if props.is_failed { return NodeState::Failed; }
@@ -66,27 +63,10 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
         NodeState::Pending
     };
 
-    let get_step_icon = |step: &WorkflowStep| -> &'static str {
-        match step {
-            WorkflowStep::Neo => "ph-database",
-            WorkflowStep::Authentication => "ph-lock-key",
-            WorkflowStep::Apim => "ph-cloud",
-            WorkflowStep::Landing => "ph-folder-simple",
-            WorkflowStep::EventGrid => "ph-lightning",
-            WorkflowStep::Raw => "ph-file-code",
-            WorkflowStep::ServiceBus => "ph-envelope-simple",
-            WorkflowStep::ContainerAppJobs => "ph-cpu",
-            WorkflowStep::Processing => "ph-gear",
-            WorkflowStep::Curated => "ph-medal",
-            WorkflowStep::Verification => "ph-check-circle",
-            WorkflowStep::Quarantine => "ph-warning-circle",
-            WorkflowStep::Rejected => "ph-x-circle",
-        }
-    };
 
-    let render_node = |step: &WorkflowStep, idx: usize, is_current: bool| -> Element {
+    let render_node = |step: &StepId, idx: usize, is_current: bool| -> Element {
         let state = state_of(step, idx);
-        let name = step.name();
+        let name = props.catalog.name_of(step);
 
         // ring-4 in the app colour punches the connecting line out from behind.
         let circle = match state {
@@ -139,9 +119,9 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                         i { class: "ph ph-spinner ph-spin text-xl" }
                     } else if state == NodeState::Active {
                         // Reached but not running: the run finished, was cancelled, or is between.
-                        i { class: "ph-fill {get_step_icon(step)} text-xl" }
+                        i { class: "ph-fill {props.catalog.icon_of(step)} text-xl" }
                     } else {
-                        i { class: "ph-fill {get_step_icon(step)} text-xl" }
+                        i { class: "ph-fill {props.catalog.icon_of(step)} text-xl" }
                     }
                 }
                 // The label is the first thing to go when space runs out; the icon still.

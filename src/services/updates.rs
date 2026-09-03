@@ -1,5 +1,3 @@
-//! Checking for, downloading and handing off a newer release.
-
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;

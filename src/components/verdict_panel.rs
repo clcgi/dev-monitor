@@ -1,5 +1,3 @@
-//! Per-flow verdicts. The status pill is one exit code; a suite has six.
-
 use crate::services::state::Verdict;
 use dioxus::prelude::*;
 

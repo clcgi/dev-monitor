@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local};
+
+use crate::services::marker_syntax::MarkerSyntax;
+use crate::services::steps::{StepCatalog, StepId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -64,44 +67,11 @@ pub struct HistoryEntry {
     pub status: ScriptStatus,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum WorkflowStep {
-    Neo,
-    Authentication,
-    Apim,
-    Landing,
-    EventGrid,
-    Raw,
-    ServiceBus,
-    ContainerAppJobs,
-    Processing,
-    Curated,
-    Verification,
-    Quarantine,
-    Rejected,
-}
-
-impl WorkflowStep {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Neo => "NEO",
-            Self::Authentication => "Authentication",
-            Self::Apim => "APIM",
-            Self::Landing => "Landing",
-            Self::EventGrid => "Event Grid",
-            Self::Raw => "Raw",
-            Self::ServiceBus => "Service Bus",
-            Self::ContainerAppJobs => "Container App Jobs",
-            Self::Processing => "Processing",
-            Self::Curated => "Curated",
-            Self::Verification => "Verification",
-            Self::Quarantine => "Quarantine",
-            Self::Rejected => "Rejected",
-        }
-    }
-}
-
 /// One verdict a run reported about itself, from a `[CDW_RESULT: ...]` marker.
+///
+/// Separate from `ScriptStatus`, which comes from the process exit code. The two
+/// answer different questions and can disagree: a suite exits non-zero because
+/// one of six flows failed, and the five that passed are still results.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Verdict {
     /// The flow that reported it. May be empty.
@@ -117,8 +87,8 @@ pub struct ScriptState {
     pub status: ScriptStatus,
     pub logs: Vec<LogMsg>,
     pub verdicts: Vec<Verdict>,
-    pub active_step: Option<WorkflowStep>,
-    pub step_history: Vec<WorkflowStep>,
+    pub active_step: Option<StepId>,
+    pub step_history: Vec<StepId>,
     pub step_started: Option<DateTime<Local>>,
     pub start_time: Option<DateTime<Local>>,
     pub end_time: Option<DateTime<Local>>,
@@ -140,6 +110,11 @@ pub struct AppState {
     pub scripts: HashMap<String, ScriptState>,
     /// The script currently executing, if any.
     pub running_script: Option<String>,
+    /// The configured steps. Loaded once at startup; the settings modal
+    /// edits this copy and writes it back to disk.
+    pub catalog: StepCatalog,
+    /// The marker tokens read from script output.
+    pub syntax: MarkerSyntax,
     pub history: Vec<HistoryEntry>,
 }
 
@@ -151,6 +126,8 @@ impl AppState {
             selected_meta: None,
             scripts: HashMap::new(),
             running_script: None,
+            catalog: crate::services::step_config::load(),
+            syntax: crate::services::step_config::load_syntax(),
             history: Vec::new(),
         }
     }
@@ -208,14 +185,14 @@ mod tests {
         let running = state.entry("tools/flow_3_extract.py");
         running.status = ScriptStatus::Running;
         running.logs.push(log("still going"));
-        running.step_history.push(WorkflowStep::Raw);
+        running.step_history.push("raw".to_string());
 
         state.selected_script = Some("tools/verify_ingestion.py".into());
 
         let live = &state.scripts["tools/flow_3_extract.py"];
         assert_eq!(live.status, ScriptStatus::Running);
         assert_eq!(live.logs.len(), 1);
-        assert_eq!(live.step_history, vec![WorkflowStep::Raw]);
+        assert_eq!(live.step_history, vec!["raw".to_string()]);
         assert_eq!(state.running_script.as_deref(), Some("tools/flow_3_extract.py"));
     }
 
@@ -225,7 +202,7 @@ mod tests {
         let e = state.entry("tools/flow_3_extract.py");
         e.logs.push(log("line one"));
         e.verdicts.push(Verdict { label: "flow_3_extract".into(), ok: true });
-        e.active_step = Some(WorkflowStep::ServiceBus);
+        e.active_step = Some("servicebus".to_string());
 
         state.selected_script = Some("tools/verify_ingestion.py".into());
         assert!(state.current().logs.is_empty(), "a script never run shows nothing");
@@ -234,7 +211,7 @@ mod tests {
         let back = state.current();
         assert_eq!(back.logs.len(), 1);
         assert_eq!(back.verdicts.len(), 1);
-        assert_eq!(back.active_step, Some(WorkflowStep::ServiceBus));
+        assert_eq!(back.active_step, Some("servicebus".to_string()));
     }
 
     #[test]

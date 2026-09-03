@@ -3,12 +3,16 @@ use std::collections::HashSet;
 use dioxus::prelude::*;
 
 use crate::services::scripts::{self, ScriptMeta};
+use crate::services::marker_syntax::MarkerSyntax;
+use crate::services::steps::StepCatalog;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct SidebarProps {
     pub selected_script: Option<String>,
     /// The script currently executing, if any.
     pub running_script: Option<String>,
+    pub catalog: StepCatalog,
+    pub syntax: MarkerSyntax,
     pub on_select: EventHandler<ScriptMeta>,
 }
 
@@ -58,12 +62,14 @@ impl Language {
 #[component]
 pub fn Sidebar(props: SidebarProps) -> Element {
     let mut groups = use_signal(Vec::<(String, Vec<ScriptMeta>)>::new);
+    let catalog = props.catalog.clone();
+    let syntax = props.syntax.clone();
     let mut language = use_signal(|| Language::All);
     // COLLAPSED, not expanded, is the set that is tracked.
     let mut collapsed = use_signal(HashSet::<String>::new);
 
     use_effect(move || {
-        groups.set(scripts::discover(&tools_dir()));
+        groups.set(scripts::discover(&tools_dir(), &catalog, &syntax));
     });
 
     let lang = *language.read();
