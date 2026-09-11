@@ -77,6 +77,11 @@ pub struct Verdict {
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct ScriptState {
     pub enabled_args: Vec<String>,
+    /// flag -> value, for the flags a script declares with `CDW_CHOICE`.
+    /// Separate from `enabled_args` because a toggle is its own presence and
+    /// a choice is not: `--case` without a value is not a shorter command, it
+    /// is a script that refuses to start.
+    pub chosen: HashMap<String, String>,
     pub status: ScriptStatus,
     pub logs: Vec<LogMsg>,
     pub verdicts: Vec<Verdict>,
@@ -92,6 +97,34 @@ pub struct ScriptState {
 impl ScriptState {
     pub fn has_started(&self) -> bool {
         self.start_time.is_some()
+    }
+
+    /// The whole command line: the toggles, then each choice as two argv
+    /// entries.
+    ///
+    /// TWO ENTRIES, never one joined by `=`. The corpus case ids contain
+    /// spaces and dots (`001.17033.000001-AA001-10 - A.pdf`); the runner
+    /// quotes each argv entry separately, so `--case` and its value survive
+    /// as they were chosen, while a joined string would have to be quoted as
+    /// one and argparse would see a flag it does not know.
+    ///
+    /// A CHOICE WITH NO VALUE IS OMITTED rather than sent empty: an empty
+    /// `--case ''` reaches the script as a case id that matches nothing, and
+    /// its error would name the empty string rather than the real problem.
+    pub fn command_args(&self) -> Vec<String> {
+        let mut args = self.enabled_args.clone();
+        let mut chosen: Vec<(&String, &String)> = self.chosen.iter().collect();
+        // A HashMap iterates in an arbitrary order, and an argv that changes
+        // between runs of the same configuration is impossible to compare in
+        // a log.
+        chosen.sort();
+        for (flag, value) in chosen {
+            if !value.is_empty() {
+                args.push(flag.clone());
+                args.push(value.clone());
+            }
+        }
+        args
     }
 }
 
@@ -223,6 +256,47 @@ mod tests {
         assert_eq!(state.current().enabled_args, vec!["--apply".to_string()]);
         state.selected_script = Some("tools/verify_ingestion.py".into());
         assert_eq!(state.current().enabled_args, vec!["--json".to_string()]);
+    }
+
+    #[test]
+    fn a_choice_reaches_the_command_line_as_two_argv_entries() {
+        // The corpus case ids contain spaces. Joined with `=` they would have
+        // to be quoted as one string, and argparse would see an unknown flag.
+        let mut state = AppState::new();
+        let e = state.entry("tools/flows/dev_corpus_e2e.py");
+        e.enabled_args = vec!["--refresh".into()];
+        e.chosen.insert("--case".into(), "001.17033.000001-AA001-10 - A.pdf".into());
+        state.selected_script = Some("tools/flows/dev_corpus_e2e.py".into());
+
+        assert_eq!(
+            state.current().command_args(),
+            vec![
+                "--refresh".to_string(),
+                "--case".to_string(),
+                "001.17033.000001-AA001-10 - A.pdf".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unchosen_value_is_left_off_rather_than_sent_empty() {
+        // `--case ''` reaches the script as a case id matching nothing, and
+        // the error would name the empty string rather than the real problem.
+        let mut state = AppState::new();
+        state.entry("x.py").chosen.insert("--case".into(), String::new());
+        state.selected_script = Some("x.py".into());
+        assert!(state.current().command_args().is_empty());
+    }
+
+    #[test]
+    fn a_chosen_case_is_remembered_per_script_like_the_toggles() {
+        let mut state = AppState::new();
+        state.entry("a.py").chosen.insert("--case".into(), "one".into());
+        state.entry("b.py").chosen.insert("--case".into(), "two".into());
+        state.selected_script = Some("a.py".into());
+        assert_eq!(state.current().chosen["--case"], "one");
+        state.selected_script = Some("b.py".into());
+        assert_eq!(state.current().chosen["--case"], "two");
     }
 
     #[test]

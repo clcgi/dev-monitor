@@ -13,6 +13,32 @@ pub struct ScriptArg {
     pub default_on: bool,
 }
 
+/// A flag a script accepts that takes a VALUE, offered in the UI as a list.
+///
+/// A toggle cannot express this. `dev_corpus_e2e.py` runs one document out of
+/// a manifest of ten, and which one is not a yes/no: the app has to offer the
+/// ten and send one back as `--case <value>`.
+///
+/// THE VALUES ARE NOT IN THE HEADER, deliberately. They live in the same file
+/// the script itself reads, so adding a document to the corpus changes the
+/// dropdown with no edit here and no edit there. A list transcribed into the
+/// header would go stale silently -- the dropdown would offer a case the
+/// script has never heard of, and the script's own error message would be the
+/// first anyone knew.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ScriptChoice {
+    pub flag: String,
+    /// Repo-relative, as declared: `tools/fixtures/dev_test_manifest.csv`.
+    pub source: String,
+    /// The column read out of it.
+    pub column: String,
+    pub help: String,
+    /// What the column holds. EMPTY IS A STATE, not a failure: the file may
+    /// not have been fetched yet, and the picker says so rather than offering
+    /// nothing and letting the script be launched without the flag.
+    pub values: Vec<String>,
+}
+
 /// What a script says about the pipeline stages it can reach.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum DeclaredSteps {
@@ -34,6 +60,8 @@ pub struct ScriptMeta {
     /// Stages the script can reach.
     pub declared_steps: DeclaredSteps,
     pub args: Vec<ScriptArg>,
+    /// Flags that take a value, each with the list to choose from.
+    pub choices: Vec<ScriptChoice>,
     /// A one-line summary, taken from the header when given.
     pub summary: String,
     /// Not offered for running.
@@ -83,6 +111,11 @@ fn parse_pairs(payload: &str) -> Vec<(String, String)> {
 pub fn parse_meta(
     path: &Path,
     repo_relative: &str,
+    // The repository root a `CDW_CHOICE` source is resolved against. Passed
+    // rather than derived from `path`: under test the tools directory is a
+    // temporary one that is not called `tools`, so stripping the relative
+    // suffix would find the wrong root exactly where it is least noticed.
+    repo_root: &Path,
     catalog: &StepCatalog,
     syntax: &MarkerSyntax,
 ) -> ScriptMeta {
@@ -91,6 +124,7 @@ pub fn parse_meta(
         category: "Other".to_string(),
         declared_steps: DeclaredSteps::Unknown,
         args: Vec::new(),
+        choices: Vec::new(),
         summary: String::new(),
         library: KNOWN_LIBRARIES.contains(&repo_relative.rsplit('/').next().unwrap_or("")),
     };
@@ -136,10 +170,80 @@ pub fn parse_meta(
                     default_on: false,
                 });
             }
+        } else if let Some(payload) = syntax.payload(line, MarkerKind::ChoiceHeader) {
+            if let Some(choice) = parse_choice(payload, repo_root) {
+                meta.choices.push(choice);
+            }
         }
     }
 
     meta
+}
+
+/// One `CDW_CHOICE` line: `--case @tools/fixtures/m.csv:source_filename  help`.
+///
+/// Returns None rather than an empty choice when the source is absent. A
+/// choice with nowhere to read from would render as a dropdown that can never
+/// be filled, and the script would then be launched with no value for a flag
+/// it requires.
+fn parse_choice(payload: &str, repo_root: &Path) -> Option<ScriptChoice> {
+    let payload = payload.trim();
+    let (flag, rest) = payload.split_once(char::is_whitespace)?;
+    if !flag.starts_with('-') {
+        return None;
+    }
+    let rest = rest.trim();
+    let spec = rest.strip_prefix('@')?;
+    // rsplit, not split: a Windows-shaped path would contain a drive colon,
+    // and the COLUMN is always the last segment.
+    let (source, tail) = spec.rsplit_once(':')?;
+    let (column, help) = tail.split_once(char::is_whitespace).unwrap_or((tail, ""));
+    if source.is_empty() || column.is_empty() {
+        return None;
+    }
+
+    Some(ScriptChoice {
+        flag: flag.to_string(),
+        source: source.to_string(),
+        column: column.to_string(),
+        help: help.trim().to_string(),
+        values: read_column(&repo_root.join(source), column),
+    })
+}
+
+/// One column of a delimited text file, in file order.
+///
+/// THE DELIMITER IS SNIFFED FROM THE HEADER, and only from the header: the
+/// corpus manifest is semicolon-delimited and holds values containing commas
+/// and spaces (`001.17033.000001-AA001-10 - A.pdf`), so sniffing per line
+/// would split a value in half and offer a case the script cannot match.
+///
+/// Quoted fields are NOT supported. The one file this reads has none, and a
+/// half-written quote parser that looks like it works is worse than an
+/// explicit limit.
+fn read_column(path: &Path, column: &str) -> Vec<String> {
+    // A missing file is the ordinary state before anything has been fetched,
+    // so it reads as "no values", not as an error.
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut lines = text.lines();
+    // Excel writes a BOM. Left on, it becomes part of the first column's name
+    // and that column can never be found.
+    let Some(header) = lines.next().map(|l| l.trim_start_matches('\u{feff}')) else {
+        return Vec::new();
+    };
+    let delimiter = if header.contains(';') { ';' } else { ',' };
+    let Some(index) = header.split(delimiter).position(|h| h.trim() == column) else {
+        return Vec::new();
+    };
+
+    lines
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| line.split(delimiter).nth(index))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 pub fn discover(
@@ -147,8 +251,12 @@ pub fn discover(
     catalog: &StepCatalog,
     syntax: &MarkerSyntax,
 ) -> Vec<(String, Vec<ScriptMeta>)> {
+    // A choice's source is declared repo-relative (`tools/fixtures/...`), the
+    // same way a script's own path is, so it is resolved against the parent of
+    // the tools directory.
+    let repo_root = tools_dir.parent().unwrap_or(tools_dir).to_path_buf();
     let mut found: Vec<ScriptMeta> = Vec::new();
-    collect(tools_dir, tools_dir, catalog, syntax, &mut found);
+    collect(tools_dir, tools_dir, &repo_root, catalog, syntax, &mut found);
 
     found.sort_by(|a, b| {
         category_rank(&a.category)
@@ -170,6 +278,7 @@ pub fn discover(
 fn collect(
     root: &Path,
     dir: &Path,
+    repo_root: &Path,
     catalog: &StepCatalog,
     syntax: &MarkerSyntax,
     found: &mut Vec<ScriptMeta>,
@@ -183,7 +292,7 @@ fn collect(
             if name.starts_with('.') || name.starts_with("__") {
                 continue;
             }
-            collect(root, &path, catalog, syntax, found);
+            collect(root, &path, repo_root, catalog, syntax, found);
             continue;
         }
 
@@ -193,7 +302,7 @@ fn collect(
         }
         let Ok(relative) = path.strip_prefix(root) else { continue };
         let Some(relative) = relative.to_str() else { continue };
-        let meta = parse_meta(&path, &format!("tools/{relative}"), catalog, syntax);
+        let meta = parse_meta(&path, &format!("tools/{relative}"), repo_root, catalog, syntax);
         if !meta.library {
             found.push(meta);
         }
@@ -282,7 +391,7 @@ mod tests {
              # CDW_ARG: --apply  Actually delete.\n\
              print('hi')\n",
         );
-        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
+        let meta = parse_meta(&path, "tools/x.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.category, "Flows");
         assert_eq!(meta.summary, "does a thing");
         assert_eq!(
@@ -299,7 +408,7 @@ mod tests {
         // fifteen scripts predate this header.
         let dir = tempdir("undeclared");
         let path = write(&dir, "old.sh", "#!/usr/bin/env bash\necho hello\n");
-        let meta = parse_meta(&path, "tools/old.sh", &StepCatalog::defaults(), &MarkerSyntax::default());
+        let meta = parse_meta(&path, "tools/old.sh", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.category, "Other");
         assert!(meta.args.is_empty());
         assert_eq!(meta.steps(), None, "unknown must not be reported as none");
@@ -309,7 +418,7 @@ mod tests {
     fn an_unknown_step_name_is_dropped_not_guessed() {
         let dir = tempdir("badstep");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=Neo,Sausages,Landing\n");
-        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
+        let meta = parse_meta(&path, "tools/x.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(
             meta.declared_steps,
             DeclaredSteps::Only(vec!["neo".into(), "landing".into()])
@@ -321,7 +430,7 @@ mod tests {
         // One matcher for both, so a name that works in a marker works here.
         let dir = tempdir("stepnames");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=event grid,CONTAINERAPPJOBS\n");
-        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
+        let meta = parse_meta(&path, "tools/x.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(
             meta.declared_steps,
             DeclaredSteps::Only(vec!["eventgrid".into(), "containerappjobs".into()])
@@ -334,7 +443,7 @@ mod tests {
         let dir = tempdir("deep");
         let body = format!("{}# CDW_SCRIPT: category=Flows\n", "x\n".repeat(HEADER_LINES + 5));
         let path = write(&dir, "x.py", &body);
-        assert_eq!(parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default()).category, "Other");
+        assert_eq!(parse_meta(&path, "tools/x.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default()).category, "Other");
     }
 
     #[test]
@@ -342,7 +451,7 @@ mod tests {
         // A positional would be appended as a bare word and change the target.
         let dir = tempdir("badarg");
         let path = write(&dir, "x.py", "# CDW_ARG: apply  no dash\n# CDW_ARG: --ok  fine\n");
-        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
+        let meta = parse_meta(&path, "tools/x.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.args.len(), 1);
         assert_eq!(meta.args[0].flag, "--ok");
     }
@@ -352,7 +461,7 @@ mod tests {
         // The reason this state exists: reset_test_documents.py reaches no pipeline.
         let dir = tempdir("stepsnone");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=none\n");
-        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
+        let meta = parse_meta(&path, "tools/x.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.declared_steps, DeclaredSteps::None);
         assert!(meta.has_no_steps());
         assert_eq!(meta.steps(), Some(&[][..]));
@@ -363,7 +472,7 @@ mod tests {
         // Unknown and none must not collapse: one draws the whole chain, the other.
         let dir = tempdir("unknownsteps");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: category=Flows\n");
-        let meta = parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default());
+        let meta = parse_meta(&path, "tools/x.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
         assert_eq!(meta.declared_steps, DeclaredSteps::Unknown);
         assert!(!meta.has_no_steps());
         assert_eq!(meta.steps(), None);
@@ -374,7 +483,7 @@ mod tests {
         // Falling back to `none` would hide the stepper and look deliberate.
         let dir = tempdir("alltypos");
         let path = write(&dir, "x.py", "# CDW_SCRIPT: steps=Sausages,Custard\n");
-        assert_eq!(parse_meta(&path, "tools/x.py", &StepCatalog::defaults(), &MarkerSyntax::default()).declared_steps, DeclaredSteps::Unknown);
+        assert_eq!(parse_meta(&path, "tools/x.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default()).declared_steps, DeclaredSteps::Unknown);
     }
 
     #[test]
@@ -382,8 +491,8 @@ mod tests {
         let dir = tempdir("lang");
         let py = write(&dir, "a.py", "#\n");
         let sh = write(&dir, "b.sh", "#\n");
-        assert_eq!(parse_meta(&py, "tools/a.py", &StepCatalog::defaults(), &MarkerSyntax::default()).language(), "py");
-        assert_eq!(parse_meta(&sh, "tools/b.sh", &StepCatalog::defaults(), &MarkerSyntax::default()).language(), "sh");
+        assert_eq!(parse_meta(&py, "tools/a.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default()).language(), "py");
+        assert_eq!(parse_meta(&sh, "tools/b.sh", &dir, &StepCatalog::defaults(), &MarkerSyntax::default()).language(), "sh");
     }
 
     #[test]
@@ -403,7 +512,7 @@ mod tests {
     fn a_script_may_declare_itself_a_library() {
         let dir = tempdir("selflib");
         let path = write(&dir, "helper.py", "# CDW_SCRIPT: library=true\n");
-        assert!(parse_meta(&path, "tools/helper.py", &StepCatalog::defaults(), &MarkerSyntax::default()).library);
+        assert!(parse_meta(&path, "tools/helper.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default()).library);
     }
 
     #[test]
@@ -415,6 +524,111 @@ mod tests {
         write(&dir, "d.py", "# CDW_SCRIPT: category=Verification\n");
         let categories: Vec<String> = discover(&dir, &StepCatalog::defaults(), &MarkerSyntax::default()).into_iter().map(|(c, _)| c).collect();
         assert_eq!(categories, vec!["Flows", "Verification", "Maintenance", "Other"]);
+    }
+
+    // ------------------------------------------------------------- choices
+
+    /// A script declaring one choice, and the CSV it reads its values from.
+    fn with_manifest(tag: &str, csv: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = tempdir(tag);
+        let tools = root.join("tools");
+        fs::create_dir_all(tools.join("fixtures")).unwrap();
+        write(&tools.join("fixtures"), "m.csv", csv);
+        let path = write(
+            &tools,
+            "corpus.py",
+            "# CDW_SCRIPT: category=Flows\n\
+             # CDW_CHOICE: --case @tools/fixtures/m.csv:source_filename  Which document to send\n\
+             # CDW_ARG: --all  Every row\n",
+        );
+        (root, path)
+    }
+
+    #[test]
+    fn a_choice_header_yields_its_flag_column_and_help() {
+        let (root, path) = with_manifest("choice", "source_filename;ext\na.pdf;PDF\n");
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices.len(), 1);
+        assert_eq!(meta.choices[0].flag, "--case");
+        assert_eq!(meta.choices[0].column, "source_filename");
+        assert_eq!(meta.choices[0].help, "Which document to send");
+    }
+
+    #[test]
+    fn the_values_come_from_the_named_column_of_the_named_file() {
+        let (root, path) = with_manifest("choice-values", "source_filename;ext\na.pdf;PDF\nb.ZIP;ZIP\n");
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices[0].values, vec!["a.pdf", "b.ZIP"]);
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_column() {
+        // Excel writes one; without stripping it the first column is named
+        // "\u{feff}source_filename" and the dropdown comes back empty.
+        let (root, path) = with_manifest("choice-bom", "\u{feff}source_filename;ext\na.pdf;PDF\n");
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices[0].values, vec!["a.pdf"]);
+    }
+
+    #[test]
+    fn a_comma_delimited_file_is_read_too() {
+        let (root, path) = with_manifest("choice-comma", "source_filename,ext\na.pdf,PDF\n");
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices[0].values, vec!["a.pdf"]);
+    }
+
+    #[test]
+    fn a_value_containing_the_other_delimiter_survives() {
+        // "001.17033.000001-AA001-10 - A.pdf" has no semicolon but the corpus
+        // is full of dots and spaces; sniffing the wrong delimiter would split
+        // a name in half and offer a case that cannot be selected.
+        let (root, path) = with_manifest("choice-sniff", "source_filename;ext\n001.1-AA, B.pdf;PDF\n");
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices[0].values, vec!["001.1-AA, B.pdf"]);
+    }
+
+    #[test]
+    fn a_missing_file_leaves_the_choice_present_with_no_values() {
+        // The picker then says so. Dropping the choice entirely would let the
+        // script be launched with no `--case` at all, which it refuses.
+        let root = tempdir("choice-missing");
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let path = write(
+            &tools,
+            "corpus.py",
+            "# CDW_SCRIPT: category=Flows\n\
+             # CDW_CHOICE: --case @tools/fixtures/absent.csv:source_filename  Which document\n",
+        );
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices.len(), 1);
+        assert!(meta.choices[0].values.is_empty());
+    }
+
+    #[test]
+    fn a_column_that_is_not_in_the_file_yields_no_values_rather_than_the_first_column() {
+        let (root, path) = with_manifest("choice-column", "other;ext\na.pdf;PDF\n");
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert!(meta.choices[0].values.is_empty());
+    }
+
+    #[test]
+    fn a_choice_and_a_toggle_coexist() {
+        let (root, path) = with_manifest("choice-and-arg", "source_filename;ext\na.pdf;PDF\n");
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.args.len(), 1);
+        assert_eq!(meta.args[0].flag, "--all");
+        assert_eq!(meta.choices.len(), 1);
+    }
+
+    #[test]
+    fn a_choice_with_no_source_is_ignored_rather_than_offered_empty() {
+        let root = tempdir("choice-nosource");
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let path = write(&tools, "x.py", "# CDW_CHOICE: --case  no source given\n");
+        let meta = parse_meta(&path, "tools/x.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert!(meta.choices.is_empty());
     }
 
     #[test]

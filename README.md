@@ -33,12 +33,39 @@ Every script in `tools/` describes itself in a header comment:
 ```python
 # CDW_SCRIPT: category=Flows; steps=Neo,Authentication,Apim,Landing; summary=...
 # CDW_ARG: --apply  Actually delete. WITHOUT IT THIS IS A DRY RUN.
+# CDW_CHOICE: --case @tools/fixtures/dev_test_manifest.csv:source_filename  Which document to send
 ```
 
 - `category`: Groups scripts in the sidebar (`Flows`, `Verification`, `Simulation`, `Maintenance`).
 - `steps`: Declares which stages the UI stepper draws.
 - `summary`: Provides a tooltip/description.
 - `CDW_ARG:`: Offers a specific flag as a toggle switch in the UI. **No flag is on by default.**
+- `CDW_CHOICE:`: Offers a flag that takes a **value**, as a dropdown. The syntax is
+  `--flag @<repo-relative file>:<column>  help text`, and the values are read from that
+  column at discovery time — so adding a row to the file changes the dropdown with no
+  change to the script and none to this app. The first value is pre-selected, the choice
+  is remembered per script, and it reaches the command line as two arguments
+  (`--case` then the value) so a value containing spaces survives. If the file is missing
+  the dropdown says so rather than sitting empty.
+
+## Test Cases from the DEV Corpus
+
+`tools/flows/dev_corpus_e2e.py` sends the **real** documents held in the `test` container
+of the DEV storage account, with the metadata `manifest.csv` supplies for each. Pick one
+from the **Test case** dropdown and run it; the route is chosen by the document's own
+size, so the eight small ones go through `uploadSmall` at the gateway and the two
+multi-gigabyte archives take pre-register plus a chunked DFS write. `--all` runs every
+row in order, one process each.
+
+The script downloads each document from the container and uploads it again through the
+gateway — the container is where the fixtures live, not a source the platform reads. The
+**manifest** is re-read from the container on every run, so its metadata is never stale.
+The **document bytes** are cached after the first download, because two of them are 5.6 GB
+and 2.4 GB; `--refetch` re-downloads them.
+
+The file indicator is sent upper-cased (`RO`/`RW`), which is what the platform parses.
+`--verbatim-indicator` sends the manifest's own lowercase spelling instead — that is how
+the misfiling of `rw` documents under `Official/` was found, and it reproduces it.
 
 ## Workflow Flows
 

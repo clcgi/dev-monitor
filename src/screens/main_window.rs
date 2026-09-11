@@ -361,10 +361,20 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                             .filter(|a| a.default_on)
                             .map(|a| a.flag.clone())
                             .collect();
+                        // The first value, so a script whose choice is required
+                        // can be run without touching the dropdown -- and only
+                        // on first selection, so a deliberate choice is not
+                        // reset by clicking away and back.
+                        let first_choices: Vec<(String, String)> = meta
+                            .choices
+                            .iter()
+                            .filter_map(|c| c.values.first().map(|v| (c.flag.clone(), v.clone())))
+                            .collect();
                         let fresh = !s.scripts.contains_key(&meta.path);
                         let entry = s.entry(&meta.path);
                         if fresh {
                             entry.enabled_args = defaults;
+                            entry.chosen = first_choices.into_iter().collect();
                         }
                         s.selected_script = Some(meta.path.clone());
                         s.selected_meta = Some(meta);
@@ -441,13 +451,18 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                             e.enabled_args.push(flag);
                         }
                     },
+                    on_choose: move |(flag, value): (String, String)| {
+                        let mut s = state.write();
+                        let Some(path) = s.selected_script.clone() else { return };
+                        s.entry(&path).chosen.insert(flag, value);
+                    },
                     on_run: move |_| {
                         let s = state.read();
                         if let (Some(script), Some(env)) = (&s.selected_script, s.selected_env) {
                             process_coroutine.send(ProcessCommand::Run {
                                 script: script.clone(),
                                 env,
-                                args: s.current().enabled_args.clone(),
+                                args: s.current().command_args(),
                             });
                         }
                     },
