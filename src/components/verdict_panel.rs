@@ -11,21 +11,25 @@ pub fn VerdictPanel(verdicts: Vec<Verdict>, on_jump: EventHandler<String>) -> El
     let total = verdicts.len();
 
     rsx! {
-        div { class: "overflow-hidden rounded-2xl border border-border-soft bg-card shadow-sm mt-2",
+        div {
             div {
-                class: "flex items-center justify-between border-b border-border-soft bg-black/5 dark:bg-white/5 px-4 py-3 text-caption-strong text-fg-muted",
-                span { "Results" }
+                class: "flex items-center justify-between px-5 pt-3 pb-2",
+                span { class: "text-caption-strong text-fg-faint uppercase tracking-wider", "Results" }
                 span {
-                    class: if passed == total { "text-accent" } else { "text-danger" },
+                    class: if passed == total {
+                        "text-caption-strong text-accent tabular-nums"
+                    } else {
+                        "text-caption-strong text-danger tabular-nums"
+                    },
                     "{passed} of {total} passed"
                 }
             }
-            ul { class: "divide-y divide-border-soft",
+            ul { class: "divide-y divide-border-soft border-t border-border-soft",
                 for verdict in verdicts.iter() {
                     li { key: "{verdict.label}",
                     button {
                         r#type: "button",
-                        class: "flex w-full items-center gap-3 px-4 py-3 text-left text-body hover:bg-black/5 dark:hover:bg-white/5 transition-colors",
+                        class: "flex w-full items-center gap-3 px-5 py-2.5 text-left text-body hover:bg-black/5 dark:hover:bg-white/5 transition-colors",
                         title: if verdict.label.is_empty() {
                             "No run label to jump to"
                         } else {
@@ -38,9 +42,9 @@ pub fn VerdictPanel(verdicts: Vec<Verdict>, on_jump: EventHandler<String>) -> El
                         },
                         i {
                             class: if verdict.ok {
-                                "ph-fill ph-check-circle text-accent text-lg"
+                                "ph-fill ph-check-circle text-accent"
                             } else {
-                                "ph-fill ph-x-circle text-danger text-lg"
+                                "ph-fill ph-x-circle text-danger"
                             },
                         }
                         span {

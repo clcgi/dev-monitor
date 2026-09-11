@@ -108,6 +108,18 @@ mod tests {
         }
     }
 
+    fn every_default_icon_has_the_fill_weight_the_stepper_renders() {
+        const CSS: &str = include_str!("../../assets/phosphor.css");
+        for step in crate::services::steps::StepCatalog::defaults().steps {
+            assert!(
+                CSS.contains(&format!(".ph-fill.ph-{}:before", step.icon)),
+                "{} renders as ph-fill ph-{}, which the stylesheet does not define",
+                step.name,
+                step.icon
+            );
+        }
+    }
+
     #[test]
     fn the_fallback_icon_exists() {
         // icon_of() returns ph-question for an unknown step.

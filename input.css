@@ -28,6 +28,7 @@
   /* Semantic state colors mapping to Apple's subdued tones if possible, else standard */
   --color-danger: #e25c5c;
   --color-warn: #d69542;
+  --color-success: #4ca66b;
   
   --font-display: 'SF Pro Display', system-ui, -apple-system, sans-serif;
   --font-text: 'SF Pro Text', system-ui, -apple-system, sans-serif;
@@ -198,6 +199,15 @@
     font-weight: 400;
     line-height: 1.0;
     letter-spacing: -0.12px;
+  }
+
+  .text-log {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.55;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
   }
 }
 

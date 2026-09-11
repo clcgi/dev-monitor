@@ -55,7 +55,7 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
 
             div {
                 id: "log-viewer-scroll",
-                class: "min-h-0 flex-1 overflow-y-auto bg-transparent px-2 py-1 font-mono text-[13px] leading-relaxed",
+                class: "min-h-0 flex-1 overflow-y-auto bg-transparent px-3 py-1 text-log",
                 onscroll: move |_evt| {
                     let mut eval_obj = eval(
                         "let el = document.getElementById('log-viewer-scroll'); if (el) { let isBottom = Math.abs(el.scrollHeight - el.scrollTop - el.clientHeight) < 10; if (isBottom) { dioxus.send('bottom'); } else { dioxus.send('scrolled'); } }"
@@ -90,8 +90,8 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
                             rsx! {
                                 div {
                                     id: "log-line-{idx}",
-                                    class: "flex gap-4 break-all py-0.5 {tone}{mark}",
-                                    span { class: "shrink-0 text-white/30", "{time_str} " }
+                                    class: "flex gap-3 break-all py-0.5 {tone}{mark}",
+                                    span { class: "shrink-0 text-white/30", "{time_str}" }
                                     span { class: "flex-1 whitespace-pre-wrap", "{log.content}" }
                                 }
                             }

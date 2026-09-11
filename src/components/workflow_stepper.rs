@@ -13,6 +13,7 @@ pub struct WorkflowStepperProps {
     pub is_failed: bool,
     pub is_succeeded: bool,
     pub catalog: StepCatalog,
+    pub on_jump: EventHandler<StepId>,
 }
 
 #[component]
@@ -70,11 +71,11 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
 
         // ring-4 in the app colour punches the connecting line out from behind.
         let circle = match state {
-            NodeState::Completed => "bg-fg-muted border-fg-muted text-card animate-land",
+            NodeState::Completed => "bg-success/15 border-success text-success animate-land",
             NodeState::Active if props.is_running =>
                 "bg-accent border-accent text-card animate-breathe shadow-lg shadow-accent/30",
             NodeState::Active    => "bg-accent border-accent text-card animate-pop",
-            NodeState::Failed    => "bg-danger border-danger text-card animate-pop",
+            NodeState::Failed    => "bg-danger/15 border-danger text-danger animate-pop",
             NodeState::Zone      => "bg-warn border-warn text-card animate-pop",
             NodeState::Pending   => "bg-transparent border-border-soft text-fg-muted",
         };
@@ -85,7 +86,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
             ""
         };
         let label = match state {
-            NodeState::Completed => "text-fg",
+            NodeState::Completed => "text-success",
             NodeState::Active    => "text-accent font-semibold",
             NodeState::Failed    => "text-danger",
             NodeState::Zone      => "text-warn",
@@ -95,9 +96,17 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
         let scale = if is_current { "scale-110" } else { "" };
 
         rsx! {
-            div {
+            button {
+                r#type: "button",
+                disabled: state == NodeState::Pending,
+                title: if state == NodeState::Pending { "Not reached yet" } else { "Jump to this step in the log" },
+                onclick: {
+                    let id = step.clone();
+                    move |_| props.on_jump.call(id.clone())
+                },
                 class: "relative z-[2] flex w-16 shrink-0 flex-col items-center gap-2 \
-                        transition-transform duration-300 sm:w-20 lg:w-28 {scale}{anticipate}",
+                        transition-transform duration-300 sm:w-20 lg:w-28 \
+                        disabled:cursor-default enabled:cursor-pointer {scale}{anticipate}",
                 div {
                     class: "relative flex size-10 items-center justify-center rounded-full \
                             border-2 ring-4 ring-card transition-colors duration-300 {circle}",
@@ -116,7 +125,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                     } else if state == NodeState::Failed {
                         i { class: "ph-fill ph-x text-xl" }
                     } else if state == NodeState::Active && props.is_running {
-                        i { class: "ph ph-spinner ph-spin text-xl" }
+                        i { class: "ph ph-spinner-gap animate-spin text-xl" }
                     } else if state == NodeState::Active {
                         // Reached but not running: the run finished, was cancelled, or is between.
                         i { class: "ph-fill {props.catalog.icon_of(step)} text-xl" }
@@ -145,7 +154,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
     rsx! {
         div {
             class: "relative mb-5 flex items-center justify-center overflow-x-auto rounded-lg \
-                    border border-border-soft bg-card shadow-sm rounded-2xl px-4 py-6 sm:px-5 sm:py-8",
+                    px-4 py-6 sm:px-5 sm:py-8",
             div { class: "flex min-w-full w-max items-center justify-center px-4",
                 for (idx, step) in all_steps.iter().enumerate() {
                     {render_node(step, idx, if is_zone { false } else { idx == current_idx })}

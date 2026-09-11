@@ -27,7 +27,8 @@ fn window_config(title: &str) -> dioxus::desktop::Config {
     dioxus::desktop::Config::new().with_resource_directory(std::env::current_dir().unwrap().join("assets")).with_window(
         dioxus::desktop::WindowBuilder::new()
             .with_title(title)
-            .with_inner_size(LogicalSize::new(1024.0, 768.0)),
+            .with_inner_size(LogicalSize::new(1440.0, 880.0))
+            .with_min_inner_size(LogicalSize::new(900.0, 600.0)),
     )
 }
 

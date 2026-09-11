@@ -142,33 +142,13 @@ pub fn parse_meta(
     meta
 }
 
-/// Every runnable script under `tools/`, grouped for the sidebar.
 pub fn discover(
     tools_dir: &Path,
     catalog: &StepCatalog,
     syntax: &MarkerSyntax,
 ) -> Vec<(String, Vec<ScriptMeta>)> {
     let mut found: Vec<ScriptMeta> = Vec::new();
-
-    if let Ok(entries) = fs::read_dir(tools_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "py" && ext != "sh" {
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let meta = parse_meta(&path, &format!("tools/{name}"), catalog, syntax);
-            if !meta.library {
-                found.push(meta);
-            }
-        }
-    }
+    collect(tools_dir, tools_dir, catalog, syntax, &mut found);
 
     found.sort_by(|a, b| {
         category_rank(&a.category)
@@ -185,6 +165,39 @@ pub fn discover(
         }
     }
     grouped
+}
+
+fn collect(
+    root: &Path,
+    dir: &Path,
+    catalog: &StepCatalog,
+    syntax: &MarkerSyntax,
+    found: &mut Vec<ScriptMeta>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        if path.is_dir() {
+            if name.starts_with('.') || name.starts_with("__") {
+                continue;
+            }
+            collect(root, &path, catalog, syntax, found);
+            continue;
+        }
+
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "py" && ext != "sh" {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(root) else { continue };
+        let Some(relative) = relative.to_str() else { continue };
+        let meta = parse_meta(&path, &format!("tools/{relative}"), catalog, syntax);
+        if !meta.library {
+            found.push(meta);
+        }
+    }
 }
 
 /// Category order in the sidebar.
@@ -215,6 +228,47 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_script_in_a_subdirectory_is_found_and_keeps_its_folder_in_the_path() {
+        let dir = tempdir("nested");
+        fs::create_dir_all(dir.join("flows")).unwrap();
+        write(&dir.join("flows"), "cdr_flat_promotes.py", "# CDW_SCRIPT: category=Flows\n");
+
+        let groups = discover(&dir, &StepCatalog::defaults(), &MarkerSyntax::default());
+
+        let flows = &groups.iter().find(|(c, _)| c == "Flows").expect("no Flows group").1;
+        assert_eq!(flows.len(), 1);
+        // The folder has to survive into the path: ScriptRunner hands this
+        // string to bash from the repository root.
+        assert_eq!(flows[0].path, "tools/flows/cdr_flat_promotes.py");
+    }
+
+    #[test]
+    fn a_library_in_a_subdirectory_stays_out_of_the_sidebar() {
+        let dir = tempdir("nested-library");
+        fs::create_dir_all(dir.join("cdw_workflows")).unwrap();
+        write(&dir.join("cdw_workflows"), "flow.py", "# CDW_SCRIPT: library=true\n");
+        write(&dir, "real.py", "# CDW_SCRIPT: category=Flows\n");
+
+        let groups = discover(&dir, &StepCatalog::defaults(), &MarkerSyntax::default());
+
+        let names: Vec<&str> = groups.iter().flat_map(|(_, v)| v.iter().map(|m| m.file_name())).collect();
+        assert_eq!(names, vec!["real.py"]);
+    }
+
+    #[test]
+    fn generated_directories_are_not_walked() {
+        let dir = tempdir("nested-pycache");
+        fs::create_dir_all(dir.join("__pycache__")).unwrap();
+        fs::create_dir_all(dir.join(".hidden")).unwrap();
+        write(&dir.join("__pycache__"), "flow.py", "# CDW_SCRIPT: category=Flows\n");
+        write(&dir.join(".hidden"), "sneaky.py", "# CDW_SCRIPT: category=Flows\n");
+
+        let groups = discover(&dir, &StepCatalog::defaults(), &MarkerSyntax::default());
+
+        assert!(groups.is_empty(), "a generated or hidden directory was walked");
     }
 
     #[test]

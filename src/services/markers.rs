@@ -16,6 +16,10 @@ pub enum Marker {
     /// A run's verdict about itself. Separate from the process exit code, which
     /// is one value for a suite of six flows.
     Result { ok: bool, label: String },
+    /// Platform log lines for one component start here.
+    TraceBegin(String),
+    /// ...and end here.
+    TraceEnd(String),
 }
 
 /// Parse one line of script output.
@@ -31,6 +35,12 @@ pub fn parse(line: &str, catalog: &StepCatalog, syntax: &MarkerSyntax) -> Option
     }
     if let Some(raw) = syntax.payload(line, MarkerKind::StepStarted) {
         return catalog.resolve(raw).map(Marker::Step);
+    }
+    if let Some(raw) = syntax.payload(line, MarkerKind::TraceBegin) {
+        return Some(Marker::TraceBegin(raw.to_string()));
+    }
+    if let Some(raw) = syntax.payload(line, MarkerKind::TraceEnd) {
+        return Some(Marker::TraceEnd(raw.to_string()));
     }
     if let Some(raw) = syntax.payload(line, MarkerKind::Run) {
         return Some(Marker::Run(raw.to_string()));
@@ -155,6 +165,34 @@ mod tests {
         let mut c = cat();
         c.steps[7].aliases.push("CAJ".into());
         assert_eq!(parse("[CDW_STEP: CAJ]", &c, &syn()), Some(Marker::Step("containerappjobs".into())));
+    }
+
+    #[test]
+    fn a_trace_block_opens_and_closes_on_its_component() {
+        assert_eq!(
+            parse("[CDW_TRACE_BEGIN: HttpUploadSmall]", &cat(), &syn()),
+            Some(Marker::TraceBegin("HttpUploadSmall".into()))
+        );
+        assert_eq!(
+            parse("[CDW_TRACE_END: HttpUploadSmall]", &cat(), &syn()),
+            Some(Marker::TraceEnd("HttpUploadSmall".into()))
+        );
+    }
+
+    #[test]
+    fn a_component_name_is_taken_verbatim_not_resolved_to_a_step() {
+        assert_eq!(
+            parse("[CDW_TRACE_BEGIN: Whatever_Nobody_Configured]", &cat(), &syn()),
+            Some(Marker::TraceBegin("Whatever_Nobody_Configured".into()))
+        );
+    }
+
+    #[test]
+    fn a_removed_trace_marker_stops_opening_blocks() {
+        // The tokens are editable like every other marker.
+        let mut sy = syn();
+        sy.markers.retain(|m| m.token != "CDW_TRACE_BEGIN");
+        assert_eq!(parse("[CDW_TRACE_BEGIN: Fn]", &cat(), &sy), None);
     }
 
     #[test]

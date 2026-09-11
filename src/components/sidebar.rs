@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 
 use crate::services::scripts::{self, ScriptMeta};
 use crate::services::marker_syntax::MarkerSyntax;
+use crate::services::state::ScriptStatus;
 use crate::services::steps::StepCatalog;
 
 #[derive(Props, Clone, PartialEq)]
@@ -11,6 +12,8 @@ pub struct SidebarProps {
     pub selected_script: Option<String>,
     /// The script currently executing, if any.
     pub running_script: Option<String>,
+    /// Each script's last outcome, keyed by path. Absent = never run.
+    pub statuses: std::collections::HashMap<String, ScriptStatus>,
     pub catalog: StepCatalog,
     pub syntax: MarkerSyntax,
     pub on_select: EventHandler<ScriptMeta>,
@@ -68,7 +71,9 @@ pub fn Sidebar(props: SidebarProps) -> Element {
     // COLLAPSED, not expanded, is the set that is tracked.
     let mut collapsed = use_signal(HashSet::<String>::new);
 
+    let mut refreshed = use_signal(|| 0u32);
     use_effect(move || {
+        let _ = refreshed.read();
         groups.set(scripts::discover(&tools_dir(), &catalog, &syntax));
     });
 
@@ -96,6 +101,13 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                     "Scripts"
                 }
                 i { class: "ph ph-list text-fg-faint md:hidden" }
+                button {
+                    r#type: "button",
+                    title: "Rescan tools/ for new or edited scripts",
+                    class: "rounded p-1 text-fg-faint transition-colors hover:text-fg",
+                    onclick: move |_| { let n = *refreshed.read(); refreshed.set(n + 1); },
+                    i { class: "ph ph-arrows-clockwise text-sm" }
+                }
             }
 
             // Language filter styled as Apple configurator chips
@@ -168,6 +180,14 @@ pub fn Sidebar(props: SidebarProps) -> Element {
 
                             if !is_collapsed {
                                 for meta in list {
+                                    {
+                                    let running = props.running_script.as_ref() == Some(&meta.path);
+                                    // The last outcome, in the colours a Postman
+                                    // user expects. A script never run keeps the
+                                    // neutral colour -- green would claim a pass
+                                    // that never happened.
+                                    let name_class = name_class(props.statuses.get(&meta.path), running);
+                                    let element: Element = rsx! {
                                     div {
                                         key: "{meta.path}",
                                         class: if Some(&meta.path) == props.selected_script.as_ref() {
@@ -185,26 +205,22 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                             move |_| props.on_select.call(m.clone())
                                         },
 
-                                        if props.running_script.as_ref() == Some(&meta.path) {
-                                            i { class: "ph ph-spinner ph-spin shrink-0 text-accent" }
+                                        if running {
+                                            i { class: "ph ph-spinner-gap animate-spin shrink-0 text-accent" }
                                         } else {
                                             span { class: "shrink-0 leading-none opacity-80",
                                                 if meta.path.ends_with(".py") { "🐍" } else { "🐚" }
                                             }
                                         }
-                                        span {
-                                            class: if props.running_script.as_ref() == Some(&meta.path) {
-                                                "hidden min-w-0 truncate text-body-strong md:block"
-                                            } else {
-                                                "hidden min-w-0 truncate text-body md:block"
-                                            },
-                                            "{meta.file_name()}"
-                                        }
-                                        if props.running_script.as_ref() == Some(&meta.path) {
+                                        span { class: "{name_class}", "{meta.file_name()}" }
+                                        if running {
                                             span {
-                                                class: "ml-auto hidden size-2 shrink-0 animate-pulse                                                         rounded-full bg-accent md:block",
+                                                class: "ml-auto hidden size-2 shrink-0 animate-pulse rounded-full bg-accent md:block",
                                             }
                                         }
+                                    }
+                                    };
+                                    element
                                     }
                                 }
                             }
@@ -215,5 +231,87 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 }
             }
         }
+    }
+}
+
+/// The colour a script's name carries, from its last outcome.
+///
+/// Postman's convention: green passed, red failed, amber somewhere in between.
+/// A script never run stays neutral -- green would claim a pass that never
+/// happened, and that is the one wrong answer a user would act on.
+fn name_class(status: Option<&ScriptStatus>, running: bool) -> &'static str {
+    const BASE: &str = "hidden min-w-0 truncate text-body md:block";
+    if running {
+        return "hidden min-w-0 truncate text-body-strong text-accent md:block";
+    }
+    match status {
+        Some(ScriptStatus::Succeeded) => "hidden min-w-0 truncate text-body text-success md:block",
+        // The 300-499 band, as asked. Note exit codes are 0-255 on every
+        // platform this runs on, so it fires only for a script that reports an
+        // HTTP-shaped code deliberately -- see the test.
+        Some(ScriptStatus::Failed(c)) if (300..=499).contains(c) => {
+            "hidden min-w-0 truncate text-body text-warn md:block"
+        }
+        Some(ScriptStatus::Failed(_)) | Some(ScriptStatus::AppError(_)) => {
+            "hidden min-w-0 truncate text-body text-danger md:block"
+        }
+        Some(ScriptStatus::Cancelled) => "hidden min-w-0 truncate text-body text-warn md:block",
+        _ => BASE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn colour(status: Option<ScriptStatus>) -> &'static str {
+        let c = name_class(status.as_ref(), false);
+        for (needle, name) in [
+            ("text-success", "green"), ("text-danger", "red"),
+            ("text-warn", "amber"), ("text-accent", "accent"),
+        ] {
+            if c.contains(needle) {
+                return name;
+            }
+        }
+        "neutral"
+    }
+
+    #[test]
+    fn a_pass_is_green_and_a_failure_is_red() {
+        assert_eq!(colour(Some(ScriptStatus::Succeeded)), "green");
+        assert_eq!(colour(Some(ScriptStatus::Failed(1))), "red");
+        assert_eq!(colour(Some(ScriptStatus::Failed(2))), "red");
+        assert_eq!(colour(Some(ScriptStatus::AppError("spawn".into()))), "red");
+    }
+
+    #[test]
+    fn the_300_to_499_band_is_amber() {
+        for code in [300, 404, 422, 499] {
+            assert_eq!(colour(Some(ScriptStatus::Failed(code))), "amber", "{code}");
+        }
+        assert_eq!(colour(Some(ScriptStatus::Failed(299))), "red");
+        assert_eq!(colour(Some(ScriptStatus::Failed(500))), "red");
+    }
+
+    #[test]
+    fn a_cancelled_run_is_amber_rather_than_red() {
+        // Stopping a run is not a failure of the script, and colouring it red
+        // would report a defect the user caused on purpose.
+        assert_eq!(colour(Some(ScriptStatus::Cancelled)), "amber");
+    }
+
+    #[test]
+    fn a_script_never_run_is_neutral() {
+        // The one answer that must not be green.
+        assert_eq!(colour(None), "neutral");
+        assert_eq!(colour(Some(ScriptStatus::Idle)), "neutral");
+    }
+
+    #[test]
+    fn a_running_script_overrides_its_last_outcome() {
+        // What it is doing now beats what it did last time.
+        assert!(name_class(Some(&ScriptStatus::Failed(1)), true).contains("text-accent"));
+        assert!(name_class(None, true).contains("text-accent"));
     }
 }

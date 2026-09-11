@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Local};
 
@@ -67,14 +67,8 @@ pub struct HistoryEntry {
     pub status: ScriptStatus,
 }
 
-/// One verdict a run reported about itself, from a `[CDW_RESULT: ...]` marker.
-///
-/// Separate from `ScriptStatus`, which comes from the process exit code. The two
-/// answer different questions and can disagree: a suite exits non-zero because
-/// one of six flows failed, and the five that passed are still results.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Verdict {
-    /// The flow that reported it. May be empty.
     pub label: String,
     pub ok: bool,
 }
@@ -82,7 +76,6 @@ pub struct Verdict {
 /// Everything about ONE script: what it is configured to run with, and what.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct ScriptState {
-    /// Flags switched on for the next run.
     pub enabled_args: Vec<String>,
     pub status: ScriptStatus,
     pub logs: Vec<LogMsg>,
@@ -90,12 +83,13 @@ pub struct ScriptState {
     pub active_step: Option<StepId>,
     pub step_history: Vec<StepId>,
     pub step_started: Option<DateTime<Local>>,
+    pub traces: BTreeMap<String, Vec<LogMsg>>,
+    pub in_trace: Option<String>,
     pub start_time: Option<DateTime<Local>>,
     pub end_time: Option<DateTime<Local>>,
 }
 
 impl ScriptState {
-    /// True once a run has begun, so the view can show a stepper and timings.
     pub fn has_started(&self) -> bool {
         self.start_time.is_some()
     }
@@ -106,14 +100,9 @@ pub struct AppState {
     pub selected_env: Option<Environment>,
     pub selected_script: Option<String>,
     pub selected_meta: Option<crate::services::scripts::ScriptMeta>,
-    /// One entry per script the user has touched, keyed by path.
     pub scripts: HashMap<String, ScriptState>,
-    /// The script currently executing, if any.
     pub running_script: Option<String>,
-    /// The configured steps. Loaded once at startup; the settings modal
-    /// edits this copy and writes it back to disk.
     pub catalog: StepCatalog,
-    /// The marker tokens read from script output.
     pub syntax: MarkerSyntax,
     pub history: Vec<HistoryEntry>,
 }
@@ -161,7 +150,6 @@ mod tests {
 
     #[test]
     fn two_scripts_keep_their_own_logs() {
-        // THE BUG THIS EXISTS FOR. Run state was global, so a running script kept.
         let mut state = AppState::new();
         state.entry("tools/flow_1_park.py").logs.push(log("park output"));
         state.entry("tools/flow_2_promote.py").logs.push(log("promote output"));
@@ -179,7 +167,6 @@ mod tests {
 
     #[test]
     fn selecting_another_script_does_not_disturb_a_running_one() {
-        // Selecting is a change of view; it used to clear a running script's state.
         let mut state = AppState::new();
         state.running_script = Some("tools/flow_3_extract.py".into());
         let running = state.entry("tools/flow_3_extract.py");
@@ -216,7 +203,6 @@ mod tests {
 
     #[test]
     fn a_script_never_run_reads_as_idle_rather_than_missing() {
-        // Must render for an unrun script, without inheriting the last selection.
         let mut state = AppState::new();
         state.entry("tools/flow_1_park.py").status = ScriptStatus::Failed(2);
         state.selected_script = Some("tools/flow_9_new.py".into());
@@ -240,8 +226,47 @@ mod tests {
     }
 
     #[test]
+    fn a_trace_block_files_its_lines_under_its_component() {
+        let mut state = AppState::new();
+        let e = state.entry("tools/flow_7.py");
+        e.in_trace = Some("HttpUploadSmall".into());
+        e.traces.entry("HttpUploadSmall".into()).or_default().push(log("boom"));
+        e.in_trace = None;
+
+        let run = &state.scripts["tools/flow_7.py"];
+        assert_eq!(run.traces["HttpUploadSmall"].len(), 1);
+        assert!(run.in_trace.is_none());
+    }
+
+    #[test]
+    fn traces_belong_to_their_script_like_everything_else() {
+        let mut state = AppState::new();
+        state.entry("a.py").traces.entry("Fn".into()).or_default().push(log("a"));
+        state.entry("b.py").traces.entry("Fn".into()).or_default().push(log("b"));
+        assert_eq!(state.scripts["a.py"].traces["Fn"][0].content, "a");
+        assert_eq!(state.scripts["b.py"].traces["Fn"][0].content, "b");
+    }
+
+    #[test]
+    fn a_script_with_no_traces_reads_as_empty_rather_than_missing() {
+        let state = AppState::new();
+        assert!(state.current().traces.is_empty());
+        assert!(state.current().in_trace.is_none());
+    }
+
+    #[test]
+    fn components_keep_a_stable_order() {
+        let mut state = AppState::new();
+        let e = state.entry("x.py");
+        for name in ["Zeta", "Alpha", "Middle"] {
+            e.traces.entry(name.into()).or_default().push(log("x"));
+        }
+        let order: Vec<&str> = state.scripts["x.py"].traces.keys().map(|s| s.as_str()).collect();
+        assert_eq!(order, ["Alpha", "Middle", "Zeta"]);
+    }
+
+    #[test]
     fn history_spans_every_script() {
-        // History is global on purpose: it is a record across runs.
         let mut state = AppState::new();
         for name in ["tools/a.py", "tools/b.py"] {
             state.history.push(HistoryEntry {

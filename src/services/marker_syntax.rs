@@ -1,12 +1,3 @@
-//! The markers the app looks for in script output.
-//!
-//! A FLAT, EDITABLE LIST. Any marker can be deleted and new ones added; the six
-//! defaults are only what a fresh install starts with, not a privileged set.
-//!
-//! What a marker cannot be is arbitrary: the app has a fixed set of things it
-//! knows how to do with one, so a marker is a TOKEN plus the KIND of behaviour
-//! it triggers. A token with no kind would parse and then do nothing.
-
 use serde::{Deserialize, Serialize};
 
 /// What the app does when it sees a marker.
@@ -25,16 +16,20 @@ pub enum MarkerKind {
     ScriptHeader,
     /// A header line declaring one flag: `# TOKEN: --apply  help`.
     ArgHeader,
+    TraceBegin,
+    TraceEnd,
 }
 
 impl MarkerKind {
-    pub const ALL: [MarkerKind; 6] = [
+    pub const ALL: [MarkerKind; 8] = [
         MarkerKind::StepStarted,
         MarkerKind::StepFinished,
         MarkerKind::Run,
         MarkerKind::Result,
         MarkerKind::ScriptHeader,
         MarkerKind::ArgHeader,
+        MarkerKind::TraceBegin,
+        MarkerKind::TraceEnd,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -45,6 +40,8 @@ impl MarkerKind {
             Self::Result => "Result",
             Self::ScriptHeader => "Script header",
             Self::ArgHeader => "Argument header",
+            Self::TraceBegin => "Trace begin",
+            Self::TraceEnd => "Trace end",
         }
     }
 
@@ -55,6 +52,7 @@ impl MarkerKind {
             Self::Result => "[TOKEN: PASS flow_1]",
             Self::ScriptHeader => "# TOKEN: category=Flows; steps=...",
             Self::ArgHeader => "# TOKEN: --apply  help text",
+            Self::TraceBegin | Self::TraceEnd => "[TOKEN: HttpUploadSmall]",
         }
     }
 
@@ -87,6 +85,8 @@ impl Default for MarkerSyntax {
                 m("CDW_RESULT", MarkerKind::Result),
                 m("CDW_SCRIPT", MarkerKind::ScriptHeader),
                 m("CDW_ARG", MarkerKind::ArgHeader),
+                m("CDW_TRACE_BEGIN", MarkerKind::TraceBegin),
+                m("CDW_TRACE_END", MarkerKind::TraceEnd),
             ],
         }
     }
@@ -135,11 +135,14 @@ mod tests {
     #[test]
     fn the_defaults_are_the_markers_the_app_shipped_with() {
         let s = MarkerSyntax::default();
-        assert_eq!(s.markers.len(), 6);
+        assert_eq!(s.markers.len(), 8);
         let tokens: Vec<&str> = s.markers.iter().map(|m| m.token.as_str()).collect();
         assert_eq!(
             tokens,
-            ["CDW_STEP", "CDW_STEP_DONE", "CDW_RUN", "CDW_RESULT", "CDW_SCRIPT", "CDW_ARG"]
+            [
+                "CDW_STEP", "CDW_STEP_DONE", "CDW_RUN", "CDW_RESULT",
+                "CDW_SCRIPT", "CDW_ARG", "CDW_TRACE_BEGIN", "CDW_TRACE_END"
+            ]
         );
     }
 
@@ -155,7 +158,7 @@ mod tests {
         let mut s = MarkerSyntax::default();
         s.markers.retain(|m| m.token != "CDW_STEP");
         assert_eq!(s.payload("[CDW_STEP: Raw]", MarkerKind::StepStarted), None);
-        assert_eq!(s.markers.len(), 5);
+        assert_eq!(s.markers.len(), 7);
     }
 
     #[test]

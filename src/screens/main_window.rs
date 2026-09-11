@@ -32,6 +32,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     let mut logs_open = use_signal(|| true);
     let mut history_open = use_signal(|| false);
     let mut settings_open = use_signal(|| false);
+    let mut traces_tab = use_signal(|| false);
     // (nonce, line index).
     let mut log_jump = use_signal(|| Option::<(u64, usize)>::None);
     let mut jump_nonce = use_signal(|| 0u64);
@@ -60,10 +61,6 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 cmd = rx.next() => {
                     match cmd {
                         Some(ProcessCommand::Run { script, env, args }) => {
-                            // Snapshotted for the whole run. Editing steps
-                            // mid-run must not change how this run's markers
-                            // resolve -- half a log parsed one way and half
-                            // another would be unreadable.
                             let catalog = state.read().catalog.clone();
                             let syntax = state.read().syntax.clone();
                             // `script` is captured for the whole run and every write below is addressed.
@@ -79,6 +76,8 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                 entry.active_step = None;
                                 entry.step_history.clear();
                                 entry.step_started = None;
+                                entry.traces.clear();
+                                entry.in_trace = None;
                             }
                             // The log it pointed into was just cleared, so the index names a different line.
                             log_jump.set(None);
@@ -131,6 +130,12 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                         }
                                                     }
                                                     // A verdict the script reached about ITSELF. Kept alongside the exit code.
+                                                    Some(Marker::TraceBegin(component)) => {
+                                                        state.write().entry(&script).in_trace = Some(component);
+                                                    }
+                                                    Some(Marker::TraceEnd(_)) => {
+                                                        state.write().entry(&script).in_trace = None;
+                                                    }
                                                     Some(Marker::Result { ok, label }) => {
                                                         state.write().entry(&script).verdicts.push(Verdict { label, ok });
                                                     }
@@ -147,7 +152,14 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                     }
                                                     None => {}
                                                 }
-                                                state.write().entry(&script).logs.push(log_msg);
+                                                {
+                                                    let mut s = state.write();
+                                                    let e = s.entry(&script);
+                                                    if let Some(component) = e.in_trace.clone() {
+                                                        e.traces.entry(component).or_default().push(log_msg.clone());
+                                                    }
+                                                    e.logs.push(log_msg);
+                                                }
                                             }
                                             kill = rx.next() => {
                                                 if let Some(ProcessCommand::Kill) = kill {
@@ -238,7 +250,6 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                             if let Some(mut p) = child_proc.take() {
                                 let _ = p.kill().await;
                             }
-                            // Addressed to whatever is RUNNING, which need not be what is selected.
                             let mut s = state.write();
                             if let Some(path) = s.running_script.take() {
                                 let e = s.entry(&path);
@@ -257,7 +268,6 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     rsx! {
         div { class: "flex h-screen flex-col bg-app",
             
-            // GLOBAL NAV (Apple style: 44px, pure black, white text)
             header {
                 class: "flex h-[44px] shrink-0 items-center justify-between bg-nav px-4 text-white",
                 div { class: "flex items-center gap-2",
@@ -300,8 +310,6 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     button {
                         r#type: "button",
                         title: "Settings",
-                        // The nav bar is dark in BOTH themes, so its controls are
-                        // white-on-dark rather than theme tokens.
                         class: "text-nav-link text-white/80 hover:text-white transition-colors \
                                 flex items-center gap-1",
                         onclick: move |_| settings_open.set(true),
@@ -316,9 +324,6 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     syntax: state.read().syntax.clone(),
                     on_close: move |_| settings_open.set(false),
                     on_save: move |(c, sy): (StepCatalog, MarkerSyntax)| {
-                        // Saved to disk AND applied in memory. A failed write is
-                        // reported but does not discard the edit -- the user
-                        // still gets what they asked for this session.
                         if let Err(e) = crate::services::step_config::save(&c) {
                             eprintln!("could not save steps.json: {e}");
                         }
@@ -340,11 +345,12 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 on_close: move |_| history_open.set(false),
             }
 
-            // Body min-h-0 is what lets the log pane scroll instead of pushing the window.
             div { class: "flex min-h-0 flex-1",
                 Sidebar {
                     selected_script: state.read().selected_script.clone(),
                     running_script: state.read().running_script.clone(),
+                    statuses: state.read().scripts.iter()
+                        .map(|(k, v)| (k.clone(), v.status.clone())).collect(),
                     catalog: state.read().catalog.clone(),
                     syntax: state.read().syntax.clone(),
                     on_select: move |meta: crate::services::scripts::ScriptMeta| {
@@ -374,10 +380,31 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     },
                     tick: *tick.read(),
                     logs_open: *logs_open.read(),
+                    traces_tab: *traces_tab.read(),
+                    on_tab: move |t: bool| traces_tab.set(t),
                     log_jump,
                     on_toggle_logs: move |_| {
                         let open = *logs_open.read();
                         logs_open.set(!open);
+                    },
+                    on_jump_to_step: move |id: StepId| {
+                        let found = {
+                            let s = state.read();
+                            let (catalog, syntax) = (s.catalog.clone(), s.syntax.clone());
+                            s.current().logs.iter().position(|l| {
+                                matches!(
+                                    crate::services::markers::parse(&l.content, &catalog, &syntax),
+                                    Some(crate::services::markers::Marker::Step(ref found)) if *found == id
+                                )
+                            })
+                        };
+                        if let Some(index) = found {
+                            logs_open.set(true);
+                            traces_tab.set(false);
+                            let nonce = *jump_nonce.read() + 1;
+                            jump_nonce.set(nonce);
+                            log_jump.set(Some((nonce, index)));
+                        }
                     },
                     on_jump_to_run: move |label: String| {
                         let needle = format!("[CDW_RUN: {label}]");
@@ -435,9 +462,9 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                 div {
                     class: "fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm",
                     div {
-                        class: "flex max-h-[84vh] w-full max-w-md flex-col overflow-hidden                                 rounded-2xl border border-border-soft bg-card shadow-2xl",
+                        class: "flex max-h-[84vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border-soft bg-card shadow-2xl",
                         div {
-                            class: "flex shrink-0 items-center justify-between border-b                                     border-border-soft px-5 py-4",
+                            class: "flex shrink-0 items-center justify-between border-b border-border-soft px-5 py-4",
                             span { class: "text-body-strong text-fg", "Azure Authentication Required" }
                             button {
                                 class: "text-xl leading-none text-fg-faint hover:text-fg transition-colors",
@@ -449,11 +476,11 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                             p { "You must be authenticated with Azure to interact with the environment." }
                             p { "Please ensure you have run:" }
                             div {
-                                class: "rounded-lg bg-black/5 dark:bg-black/40 p-4 font-mono text-[13px]                                         text-fg shadow-inner border border-border-soft/50",
+                                class: "rounded-lg bg-black/5 dark:bg-black/40 p-4 font-mono text-[13px] text-fg shadow-inner border border-border-soft/50",
                                 "az login"
                             }
                             button {
-                                class: "mt-4 w-full rounded-full bg-accent px-5 py-3 text-button-utility text-white                                         hover:scale-95 transition-transform",
+                                class: "mt-4 w-full rounded-full bg-accent px-5 py-3 text-button-utility text-white hover:scale-95 transition-transform",
                                 onclick: move |_| props.show_auth_reminder.set(false),
                                 "I have authenticated"
                             }
@@ -465,13 +492,8 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     }
 }
 
-/// Mark every chain step BEFORE `step` as completed.
-///
-/// A script may skip a stage it has no evidence for, so arriving at Raw means
-/// Landing happened whether or not it was announced.
 fn complete_up_to(history: &mut Vec<StepId>, step: &str, catalog: &StepCatalog) {
     let Some(idx) = catalog.chain_index(step) else {
-        // A branch -- Quarantine, Rejected -- completes nothing before it.
         return;
     };
     for earlier in catalog.chain().iter().take(idx) {
