@@ -7,6 +7,7 @@ use crate::components::workflow_stepper::WorkflowStepper;
 use crate::components::verdict_panel::VerdictPanel;
 use crate::components::trace_panel::TracePanel;
 use crate::components::arg_picker::ArgPicker;
+use crate::components::choice_picker::ChoicePicker;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct DashboardProps {
@@ -15,6 +16,8 @@ pub struct DashboardProps {
     pub on_run: EventHandler<()>,
     pub on_stop: EventHandler<()>,
     pub on_toggle_arg: EventHandler<String>,
+    /// (flag, value) for a `CDW_CHOICE` flag.
+    pub on_choose: EventHandler<(String, String)>,
     pub on_jump_to_run: EventHandler<String>,
     pub on_jump_to_step: EventHandler<crate::services::steps::StepId>,
     pub on_toggle_logs: EventHandler<()>,
@@ -182,6 +185,16 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                         }
                                     }
                                 }
+                            }
+
+                            // Above the toggles: the case is WHAT runs, the
+                            // toggles only modify how, and reading them in the
+                            // other order invites launching the default case.
+                            ChoicePicker {
+                                choices: state.selected_meta.as_ref().map(|m| m.choices.clone()).unwrap_or_default(),
+                                chosen: run.chosen.clone(),
+                                disabled: is_running,
+                                on_choose: move |pair: (String, String)| props.on_choose.call(pair),
                             }
 
                             ArgPicker {

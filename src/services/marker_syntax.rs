@@ -16,18 +16,23 @@ pub enum MarkerKind {
     ScriptHeader,
     /// A header line declaring one flag: `# TOKEN: --apply  help`.
     ArgHeader,
+    /// A header line declaring one flag that takes a VALUE, and where the
+    /// values come from: `# TOKEN: --case @file.csv:column  help`. A toggle
+    /// cannot express this -- the app has to offer a list and send one of it.
+    ChoiceHeader,
     TraceBegin,
     TraceEnd,
 }
 
 impl MarkerKind {
-    pub const ALL: [MarkerKind; 8] = [
+    pub const ALL: [MarkerKind; 9] = [
         MarkerKind::StepStarted,
         MarkerKind::StepFinished,
         MarkerKind::Run,
         MarkerKind::Result,
         MarkerKind::ScriptHeader,
         MarkerKind::ArgHeader,
+        MarkerKind::ChoiceHeader,
         MarkerKind::TraceBegin,
         MarkerKind::TraceEnd,
     ];
@@ -40,6 +45,7 @@ impl MarkerKind {
             Self::Result => "Result",
             Self::ScriptHeader => "Script header",
             Self::ArgHeader => "Argument header",
+            Self::ChoiceHeader => "Choice header",
             Self::TraceBegin => "Trace begin",
             Self::TraceEnd => "Trace end",
         }
@@ -52,13 +58,14 @@ impl MarkerKind {
             Self::Result => "[TOKEN: PASS flow_1]",
             Self::ScriptHeader => "# TOKEN: category=Flows; steps=...",
             Self::ArgHeader => "# TOKEN: --apply  help text",
+            Self::ChoiceHeader => "# TOKEN: --case @file.csv:column  help text",
             Self::TraceBegin | Self::TraceEnd => "[TOKEN: HttpUploadSmall]",
         }
     }
 
     /// Headers run to the end of the line; the rest are bracketed.
     pub fn is_header(&self) -> bool {
-        matches!(self, Self::ScriptHeader | Self::ArgHeader)
+        matches!(self, Self::ScriptHeader | Self::ArgHeader | Self::ChoiceHeader)
     }
 }
 
@@ -85,6 +92,7 @@ impl Default for MarkerSyntax {
                 m("CDW_RESULT", MarkerKind::Result),
                 m("CDW_SCRIPT", MarkerKind::ScriptHeader),
                 m("CDW_ARG", MarkerKind::ArgHeader),
+                m("CDW_CHOICE", MarkerKind::ChoiceHeader),
                 m("CDW_TRACE_BEGIN", MarkerKind::TraceBegin),
                 m("CDW_TRACE_END", MarkerKind::TraceEnd),
             ],
@@ -135,13 +143,13 @@ mod tests {
     #[test]
     fn the_defaults_are_the_markers_the_app_shipped_with() {
         let s = MarkerSyntax::default();
-        assert_eq!(s.markers.len(), 8);
+        assert_eq!(s.markers.len(), 9);
         let tokens: Vec<&str> = s.markers.iter().map(|m| m.token.as_str()).collect();
         assert_eq!(
             tokens,
             [
                 "CDW_STEP", "CDW_STEP_DONE", "CDW_RUN", "CDW_RESULT",
-                "CDW_SCRIPT", "CDW_ARG", "CDW_TRACE_BEGIN", "CDW_TRACE_END"
+                "CDW_SCRIPT", "CDW_ARG", "CDW_CHOICE", "CDW_TRACE_BEGIN", "CDW_TRACE_END"
             ]
         );
     }
@@ -158,7 +166,7 @@ mod tests {
         let mut s = MarkerSyntax::default();
         s.markers.retain(|m| m.token != "CDW_STEP");
         assert_eq!(s.payload("[CDW_STEP: Raw]", MarkerKind::StepStarted), None);
-        assert_eq!(s.markers.len(), 7);
+        assert_eq!(s.markers.len(), 8);
     }
 
     #[test]
