@@ -6,6 +6,9 @@ use std::collections::{BTreeMap, HashMap};
 
 pub const METADATA_UNRESOLVED: &str = "METADATA_UNRESOLVED";
 
+/// cdw.domain.file_roles.FileIndicator: curated placement parks any other value (reason NO_ROLE).
+pub const READABLE_INDICATORS: [&str; 4] = ["RO", "RW", "RP", "RA"];
+
 pub const STALL_AFTER_MINUTES: i64 = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -290,6 +293,8 @@ pub struct Header {
 pub struct Candidate {
     pub key: String,
     pub document_id: String,
+    /// Unique per arrival: a document that arrived twice shares its documentId across rows.
+    pub file_guid: String,
     pub revision: String,
     pub state: String,
     pub registered: String,
@@ -407,6 +412,19 @@ impl<'a> Ctx<'a> {
         Some(arrived + Duration::days(self.t.env.landing_retention_days.max(0)))
     }
 
+    /// The curated address the catalog records, if any (it writes an empty one on every document).
+    fn curated_address(&self) -> Option<&'a str> {
+        self.root.curated.as_ref().map(|c| c.path.as_str()).filter(|p| !p.is_empty())
+    }
+
+    /// (members placed in curated, members with bytes in raw)
+    fn members_curated(&self) -> (usize, usize) {
+        let has = |loc: &Option<super::model::Location>| loc.as_ref().is_some_and(|l| !l.path.is_empty());
+        let curated = self.t.family.iter().filter(|m| has(&m.curated)).count();
+        let files = self.t.family.iter().filter(|m| has(&m.raw)).count();
+        (curated, files)
+    }
+
     fn written_members(&self) -> Vec<&'a Doc> {
         self.t
             .family
@@ -508,6 +526,7 @@ pub fn build(t: &Trace, now: DateTime<Utc>) -> Option<TraceView> {
             .map(|c| Candidate {
                 key: c.display_key().to_string(),
                 document_id: c.document_id.clone(),
+                file_guid: c.file_guid.clone(),
                 revision: c.revision_id.clone(),
                 state: c.state.clone(),
                 registered: f::parse_opt(&c.registered_at).map(f::day_minute).unwrap_or_else(|| DASH.into()),
@@ -1151,18 +1170,41 @@ fn step_curated(cx: &Ctx) -> Step {
         }
         return s;
     }
+    // The catalog writes an empty `curated` object on every document; only a path is an address.
+    let curated_path = r.curated.as_ref().is_some_and(|c| !c.path.is_empty());
+    let placement_keys = r.attribute("reference.sbmProjectNumber").is_some()
+        && (r.attribute("reference.uniqueDocNumber").is_some() || !r.business_key.is_empty());
     if cx.t.is_archive {
-        s.status = Status::Skipped;
-        s.detail = "archive roots are not offered".into();
-        s.why = "An archive root is retained, never offered to a consumer; its members are curated individually.".into();
+        let (placed, files) = cx.members_curated();
+        s.status = if cx.curated_address().is_some() { Status::Done } else { Status::Skipped };
+        s.detail = match cx.curated_address() {
+            Some(_) => format!("curated address assigned · {placed} of {files} members in curated"),
+            None => "archive roots are not offered".into(),
+        };
+        s.why = "An archive root gets a curated address so its place in the tree is visible, but never its bytes: it is retained, not offered to a consumer. Its members are placed in curated one by one.".into();
+        if let Some(path) = cx.curated_address() {
+            s.meta.push(fact("ADDRESS", path.to_string()));
+        }
+        s.meta.push(fact("MEMBERS IN CURATED", format!("{placed} of {files}")));
     } else if matches!(r.state.as_str(), "Quarantined" | "Rejected" | "Expired") {
         s.status = Status::Skipped;
         s.detail = "not taken".into();
         s.why = "Only documents that reach raw are curated.".into();
-    } else if r.curated.is_some() {
+    } else if curated_path {
         s.status = Status::Failed;
         s.detail = "the catalog names a curated address with no object".into();
-        s.why = "catalog.curated is set, but nothing exists at that path.".into();
+        s.why = "catalog.curated.path is set, but nothing exists at that path.".into();
+    } else if r.dispatched_at.is_some() && !READABLE_INDICATORS.contains(&r.file_indicator.as_str()) {
+        s.status = Status::Stalled;
+        s.prov = Some(Prov::Inferred);
+        s.detail = format!("parked — file indicator {:?} cannot be read", r.file_indicator);
+        s.why = "Curated placement reads the file indicator to choose the role and the Official/Native half, and accepts only RO, RW, RP or RA exactly. Any other value parks the document (CuratedSkipped reason=NO_ROLE); it stays intact in raw until the indicator is corrected and the document is re-evaluated.".into();
+        s.meta.push(fact("FILE INDICATOR", f::or_dash(Some(r.file_indicator.clone()))));
+    } else if r.dispatched_at.is_some() && !placement_keys {
+        s.status = Status::Stalled;
+        s.prov = Some(Prov::Inferred);
+        s.detail = "parked — no project or document number".into();
+        s.why = "The curated path is built from the register's project and document numbers. Without both, placement parks the document (CuratedSkipped reason=NO_PLACEMENT_KEYS).".into();
     } else {
         s.detail = "not written yet".into();
         s.why = "Curation follows promotion and the processing rules.".into();
@@ -1372,7 +1414,7 @@ fn zone_row(cx: &Ctx, zone: &str) -> ZoneRow {
     let check = cx.blob(zone);
     let built = check.map_or(cx.t.env.has_container(zone), |b| b.container_exists);
     let present = check.and_then(|b| b.exists) == Some(true);
-    let path = check
+    let mut path = check
         .and_then(|b| b.path.as_ref().map(|p| format!("{}/{p}", b.container)))
         .filter(|_| present)
         .unwrap_or_else(|| DASH.into());
@@ -1408,6 +1450,17 @@ fn zone_row(cx: &Ctx, zone: &str) -> ZoneRow {
             _ => "No curated copy for this document.".into(),
         };
         (tag, note)
+    };
+    let (tag, note) = match (zone, cx.t.is_archive, cx.curated_address()) {
+        ("curated", true, Some(address)) if !present => {
+            let (placed, files) = cx.members_curated();
+            path = format!("curated/{address}");
+            (
+                "address only".to_string(),
+                format!("Archive roots get a curated address but never bytes; their members are placed one by one — {placed} of {files} are in curated."),
+            )
+        }
+        _ => (tag, note),
     };
     ZoneRow { zone: zone.into(), present, built, tag, path, note, size }
 }
@@ -2116,6 +2169,58 @@ mod tests {
         assert_eq!(admitted.entries[0].kind, LogKind::Audit);
         assert_eq!(admitted.lag, "logs unavailable");
         assert!(v.gaps.iter().any(|g| g.short == "Log lines could not be read"));
+    }
+
+    #[test]
+    fn curated_state_follows_the_path_and_the_platform_s_parking_rules() {
+        let mut t = parked();
+        t.env.containers.push("curated".into());
+        let root = t.root.as_mut().unwrap();
+        root.state = "Dispatched".into();
+        root.pending_since = None;
+        root.promoted_at = Some("2026-08-11T04:12:14Z".into());
+        root.dispatched_at = Some("2026-08-11T04:12:15Z".into());
+        root.curated = Some(Location { container: String::new(), path: String::new() });
+        root.attributes.insert("reference.sbmProjectNumber".into(), json!("SM1000"));
+        root.attributes.insert("reference.uniqueDocNumber".into(), json!("001-x"));
+
+        root.file_indicator = "RW".into();
+        let not_yet = build(&t, now()).unwrap();
+        assert_eq!(by_id(&not_yet, StepId::Curated).status, Status::Waiting, "an empty curated object is not a failure");
+
+        t.root.as_mut().unwrap().file_indicator = "rw".into();
+        let parked_on_indicator = build(&t, now()).unwrap();
+        let step = by_id(&parked_on_indicator, StepId::Curated);
+        assert_eq!(step.status, Status::Stalled);
+        assert!(step.detail.contains("\"rw\""), "{}", step.detail);
+
+        let root = t.root.as_mut().unwrap();
+        root.file_indicator = "RO".into();
+        root.curated = Some(Location { container: "curated".into(), path: "NEO/SM1000/001-x/00/Official/g.pdf".into() });
+        t.blobs[4] = BlobCheck { zone: "curated".into(), container: "curated".into(), container_exists: true, path: Some("NEO/SM1000/001-x/00/Official/g.pdf".into()), exists: Some(true), size: Some(1), last_modified: None, error: None };
+        let placed = build(&t, now()).unwrap();
+        assert_eq!(by_id(&placed, StepId::Curated).status, Status::Done);
+    }
+
+    #[test]
+    fn a_curated_archive_root_shows_an_address_and_its_curated_members_not_a_missing_object() {
+        let mut t = half_extracted();
+        t.env.containers.push("curated".into());
+        t.root.as_mut().unwrap().curated = Some(Location { container: "curated".into(), path: "PACE/P/D/00/Native/g-root.zip".into() });
+        t.family[0].curated = Some(Location { container: "curated".into(), path: "PACE/P/D/00/Native/g-m1.pdf".into() });
+        let mut second = t.family[0].clone();
+        second.file_guid = "g-m2".into();
+        second.path_from_root = Some("inner.zip/notes.txt".into());
+        second.curated = None;
+        t.family.push(second);
+        let v = build(&t, now()).unwrap();
+        let curated = v.zones.iter().find(|z| z.zone == "curated").unwrap();
+        assert_eq!(curated.tag, "address only");
+        assert!(curated.note.contains("1 of 2"), "{}", curated.note);
+        assert_eq!(curated.path, "curated/PACE/P/D/00/Native/g-root.zip");
+        let step = by_id(&v, StepId::Curated);
+        assert_eq!(step.status, Status::Done);
+        assert!(step.detail.contains("1 of 2 members"), "{}", step.detail);
     }
 
     #[test]

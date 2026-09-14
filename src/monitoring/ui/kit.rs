@@ -1,3 +1,4 @@
+use crate::monitoring::fleet_view::{Sort, PAGE_SIZE};
 use crate::monitoring::tokens::*;
 use crate::monitoring::trace_view::{Prov, Status, Tone};
 use dioxus::prelude::*;
@@ -139,12 +140,76 @@ pub fn ActionButton(label: String, icon: &'static str, primary: bool, onclick: E
 
 /// Table header row over a CSS grid, shared by every fleet table.
 #[component]
-pub fn GridHead(columns: String, min_width: u32, labels: Vec<(String, bool)>) -> Element {
-    let cell = format!("{}letter-spacing:.16em;color:{DIM}", mono(400, 9.0));
+pub fn GridHead(
+    columns: String,
+    min_width: u32,
+    labels: Vec<(String, bool)>,
+    sort: Option<Sort>,
+    on_sort: EventHandler<usize>,
+    #[props(default)] fixed: Vec<usize>,
+) -> Element {
     rsx! {
         div { style: "display:grid;grid-template-columns:{columns};gap:9px;padding:9px 18px;border-bottom:1px solid {BORDER};background:{CARD_SOFT};min-width:{min_width}px",
-            for (label, right) in labels {
-                span { style: if right { format!("{cell};text-align:right;padding-right:16px") } else { cell.clone() }, "{label}" }
+            for (i, (label, right)) in labels.into_iter().enumerate() {
+                {
+                    let active = sort.filter(|s| s.column == i);
+                    let color = if active.is_some() { ORANGE_DEEP } else { DIM };
+                    let align = if right { "justify-content:flex-end;padding-right:16px;" } else { "" };
+                    let style = format!(
+                        "display:flex;align-items:center;gap:4px;min-width:0;background:none;border:none;padding:0;{align}{}letter-spacing:.16em;color:{color}",
+                        mono(if active.is_some() { 700 } else { 400 }, 9.0)
+                    );
+                    let arrow = active.map(|s| if s.ascending { "caret-up" } else { "caret-down" }).unwrap_or("caret-up-down");
+                    let arrow_color = if active.is_some() { color } else { GHOST };
+                    let aria = active.map(|s| if s.ascending { "ascending" } else { "descending" }).unwrap_or("none");
+                    let direction = active.map(|s| if s.ascending { " (ascending)" } else { " (descending)" }).unwrap_or_default();
+                    if fixed.contains(&i) {
+                        rsx! { span { key: "{i}", style: "{style}", "{label}" } }
+                    } else {
+                        rsx! {
+                            button { key: "{i}", r#type: "button", "aria-sort": "{aria}", title: "Sort by {label}{direction}", style: "{style};cursor:pointer", onclick: move |_| on_sort.call(i),
+                                "{label}"
+                                Icon { name: arrow, size: 11.0, color: arrow_color.to_string() }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Previous / next over pages of PAGE_SIZE rows; nothing when everything fits on one page.
+#[component]
+pub fn Pager(page: usize, pages: usize, total: usize, on_page: EventHandler<usize>) -> Element {
+    if total <= PAGE_SIZE {
+        return rsx! {};
+    }
+    let range = format!("{}–{} of {total}", page * PAGE_SIZE + 1, ((page + 1) * PAGE_SIZE).min(total));
+    let position = format!("Page {} of {pages}", page + 1);
+    let (has_prev, has_next) = (page > 0, page + 1 < pages);
+    let button = |enabled: bool| {
+        format!(
+            "display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:1px solid {DASH};border-radius:8px;background:{CARD};color:{};cursor:{};{}",
+            if enabled { TEXT_SOFT } else { GHOST },
+            if enabled { "pointer" } else { "default" },
+            sans(600, 12.0)
+        )
+    };
+    let (prev_style, next_style) = (button(has_prev), button(has_next));
+    let text = format!("{}color:{TEXT_BODY}", sans(500, 12.5));
+    rsx! {
+        div { style: "display:flex;align-items:center;gap:12px;padding:10px 18px;border-top:1px solid {ROW_RULE};flex-wrap:wrap",
+            span { style: "{text}", "{range}" }
+            span { style: "flex:1" }
+            span { style: "{text}", "{position}" }
+            button { r#type: "button", disabled: !has_prev, style: "{prev_style}", onclick: move |_| if has_prev { on_page.call(page - 1) },
+                Icon { name: "caret-left", size: 13.0, color: TEXT_SOFT.to_string() }
+                "Previous"
+            }
+            button { r#type: "button", disabled: !has_next, style: "{next_style}", onclick: move |_| if has_next { on_page.call(page + 1) },
+                "Next"
+                Icon { name: "caret-right", size: 13.0, color: TEXT_SOFT.to_string() }
             }
         }
     }

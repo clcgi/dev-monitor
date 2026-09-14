@@ -1,5 +1,5 @@
 use super::format::{self as f, DASH};
-use super::model::{DeadLetters, Doc, Overview, StuckRoot, Timing};
+use super::model::{BlobCheck, DeadLetters, Doc, Overview, StuckRoot, Timing};
 use super::trace_view::{Tone, STALL_AFTER_MINUTES};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
@@ -48,9 +48,13 @@ pub struct QueueRow {
     pub pending_key: String,
     pub lifecycle: String,
     pub hot: bool,
+    pub arrived_at: Option<i64>,
+    pub waiting_secs: Option<i64>,
+    pub attempt_count: Option<i64>,
+    pub lifecycle_secs: Option<i64>,
 }
 
-fn next_lifecycle(o: &Overview, doc: &Doc, now: DateTime<Utc>) -> Option<(String, bool)> {
+fn next_lifecycle(o: &Overview, doc: &Doc, now: DateTime<Utc>) -> Option<(String, bool, i64)> {
     let deletes = landing_deletes_at(doc, o.env.landing_retention_days).map(|t| ("deletes", t));
     let expires = f::parse_opt(&doc.pending_since)
         .zip(pending_max_days(o, doc))
@@ -59,9 +63,9 @@ fn next_lifecycle(o: &Overview, doc: &Doc, now: DateTime<Utc>) -> Option<(String
     let left = at - now;
     let hot = left < Duration::hours(HOT_WITHIN_HOURS);
     Some(if left < Duration::zero() {
-        (format!("{verb} overdue {}", countdown(left)), true)
+        (format!("{verb} overdue {}", countdown(left)), true, left.num_seconds())
     } else {
-        (format!("{verb} {}", countdown(left)), hot)
+        (format!("{verb} {}", countdown(left)), hot, left.num_seconds())
     })
 }
 
@@ -73,7 +77,10 @@ pub fn queue(o: &Overview, now: DateTime<Utc>) -> (Vec<Kpi>, Vec<QueueRow>) {
         .iter()
         .map(|d| {
             let since = f::parse_opt(&d.pending_since);
-            let (lifecycle, hot) = next_lifecycle(o, d, now).unwrap_or_else(|| (DASH.into(), false));
+            let (lifecycle, hot, lifecycle_secs) = match next_lifecycle(o, d, now) {
+                Some((text, hot, secs)) => (text, hot, Some(secs)),
+                None => (DASH.into(), false, None),
+            };
             QueueRow {
                 key: d.display_key().to_string(),
                 document_id: d.document_id.clone(),
@@ -84,6 +91,10 @@ pub fn queue(o: &Overview, now: DateTime<Utc>) -> (Vec<Kpi>, Vec<QueueRow>) {
                 pending_key: f::or_dash(d.pending_key.clone()),
                 lifecycle,
                 hot,
+                arrived_at: f::parse_opt(&d.uploaded_at).or(since).map(|t| t.timestamp()),
+                waiting_secs: since.map(|s| (now - s).num_seconds()),
+                attempt_count: d.pending_attempts.map(i64::from),
+                lifecycle_secs,
             }
         })
         .collect();
@@ -148,6 +159,8 @@ pub struct StuckRow {
     pub last: String,
     pub replica: String,
     pub stalled: bool,
+    pub last_secs: Option<i64>,
+    pub deepest_n: Option<i64>,
 }
 
 pub fn is_stalled(s: &StuckRoot, now: DateTime<Utc>) -> bool {
@@ -184,6 +197,8 @@ pub fn stuck(o: &Overview, now: DateTime<Utc>) -> Vec<StuckRow> {
                 last: f::parse_opt(&s.last_progress).map(|p| format!("{} ago", f::span(now - p))).unwrap_or_else(|| DASH.into()),
                 replica: s.replica.clone().unwrap_or_else(|| "unknown".into()),
                 stalled: is_stalled(s, now),
+                last_secs: f::parse_opt(&s.last_progress).map(|p| (now - p).num_seconds()),
+                deepest_n: s.deepest.map(i64::from),
             }
         })
         .collect()
@@ -199,6 +214,9 @@ pub struct RefRow {
     pub waiting: usize,
     pub tone: Tone,
     pub note: String,
+    pub generation_n: Option<i64>,
+    pub age_secs: Option<i64>,
+    pub row_count: Option<i64>,
 }
 
 pub fn references(o: &Overview, now: DateTime<Utc>) -> Vec<RefRow> {
@@ -229,6 +247,9 @@ pub fn references(o: &Overview, now: DateTime<Utc>) -> Vec<RefRow> {
                 waiting,
                 tone,
                 note,
+                generation_n: p.generation,
+                age_secs: age.map(|a| a.num_seconds()),
+                row_count: p.row_count.map(|r| r as i64),
             }
         })
         .collect()
@@ -243,6 +264,10 @@ pub struct DeadRow {
     pub landing_deletes: String,
     pub retry: String,
     pub hot: bool,
+    pub parked_ts: Option<i64>,
+    pub deletes_secs: Option<i64>,
+    pub deliveries: Option<i64>,
+    pub sequence: Option<i64>,
 }
 
 pub fn dead_letters(d: &DeadLetters, now: DateTime<Utc>) -> Vec<DeadRow> {
@@ -276,6 +301,10 @@ pub fn dead_letters(d: &DeadLetters, now: DateTime<Utc>) -> Vec<DeadRow> {
                     m.reason.as_ref().map(|r| format!(" · {r}")).unwrap_or_default()
                 ),
                 hot: !promoted && deletes.is_some_and(|t| t - now < Duration::hours(HOT_WITHIN_HOURS)),
+                parked_ts: f::parse_opt(&m.enqueued_at).map(|t| t.timestamp()),
+                deletes_secs: deletes.map(|t| (t - now).num_seconds()),
+                deliveries: m.delivery_count.map(i64::from),
+                sequence: m.sequence,
             }
         })
         .collect()
@@ -289,6 +318,9 @@ pub struct TimingRow {
     pub samples: usize,
     pub in_step: usize,
     pub oldest: String,
+    pub p50_secs: Option<i64>,
+    pub p95_secs: Option<i64>,
+    pub oldest_secs: Option<i64>,
 }
 
 /// Nearest-rank: an observed dwell, never an interpolated one.
@@ -346,6 +378,7 @@ pub fn timing(t: &Timing, now: DateTime<Utc>) -> Vec<TimingRow> {
             dwell.sort();
             let waiting: Vec<Option<DateTime<Utc>>> = docs.iter().filter_map(|d| in_step(d)).map(|s| f::parse_opt(&s)).collect();
             let oldest = waiting.iter().flatten().min().map(|s| f::span(now - *s));
+            let oldest_secs = waiting.iter().flatten().min().map(|s| (now - *s).num_seconds());
             TimingRow {
                 step,
                 p50: percentile(&dwell, 0.50).map(f::span).unwrap_or_else(|| DASH.into()),
@@ -353,6 +386,9 @@ pub fn timing(t: &Timing, now: DateTime<Utc>) -> Vec<TimingRow> {
                 samples: dwell.len(),
                 in_step: waiting.len(),
                 oldest: oldest.unwrap_or_else(|| DASH.into()),
+                p50_secs: percentile(&dwell, 0.50).map(|d| d.num_seconds()),
+                p95_secs: percentile(&dwell, 0.95).map(|d| d.num_seconds()),
+                oldest_secs,
             }
         })
         .collect()
@@ -379,6 +415,8 @@ pub fn home(o: &Overview, now: DateTime<Utc>) -> Home {
         ("Audit rows".to_string(), o.audit_rows.to_string()),
         ("Parked on metadata".to_string(), o.parked.len().to_string()),
         ("Extractions stalled".to_string(), format!("{stalled} of {}", o.stuck.len())),
+        ("Curated documents".to_string(), o.curated_rows.to_string()),
+        ("Dispatched, not curated".to_string(), o.dispatched_not_curated.to_string()),
         ("Reference sets".to_string(), o.references.len().to_string()),
         ("Cosmos".to_string(), format!("{}/{}", o.env.cosmos_account, o.env.cosmos_db)),
         ("Storage".to_string(), o.env.store_account.clone()),
@@ -403,6 +441,163 @@ pub fn home(o: &Overview, now: DateTime<Utc>) -> Home {
                 plural(o.audit_rows, "audit row")
             ),
             facts,
+        }
+    }
+}
+
+// ------------------------------------------------------------------ sorting and pages
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum SortKey {
+    Num(i64),
+    Text(String),
+    Missing,
+}
+
+pub trait Sortable {
+    fn sort_key(&self, column: usize) -> SortKey;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sort {
+    pub column: usize,
+    pub ascending: bool,
+}
+
+pub const PAGE_SIZE: usize = 50;
+
+/// The same column flips direction; another column starts ascending.
+pub fn toggle(current: Option<Sort>, column: usize) -> Sort {
+    match current {
+        Some(s) if s.column == column => Sort { column, ascending: !s.ascending },
+        _ => Sort { column, ascending: true },
+    }
+}
+
+/// Stable, and unknown values stay last in either direction.
+pub fn sorted<T: Sortable + Clone>(rows: &[T], sort: Option<Sort>) -> Vec<T> {
+    use std::cmp::Ordering;
+    let mut out = rows.to_vec();
+    if let Some(Sort { column, ascending }) = sort {
+        out.sort_by(|a, b| match (a.sort_key(column), b.sort_key(column)) {
+            (SortKey::Missing, SortKey::Missing) => Ordering::Equal,
+            (SortKey::Missing, _) => Ordering::Greater,
+            (_, SortKey::Missing) => Ordering::Less,
+            (x, y) => {
+                let order = match (x, y) {
+                    (SortKey::Num(x), SortKey::Num(y)) => x.cmp(&y),
+                    (SortKey::Text(x), SortKey::Text(y)) => x.to_lowercase().cmp(&y.to_lowercase()),
+                    (SortKey::Num(_), _) => Ordering::Less,
+                    _ => Ordering::Greater,
+                };
+                if ascending { order } else { order.reverse() }
+            }
+        });
+    }
+    out
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Page<T> {
+    pub rows: Vec<T>,
+    pub page: usize,
+    pub pages: usize,
+    pub total: usize,
+}
+
+/// A page past the end (after a refresh shrank the data) lands on the last page.
+pub fn paginate<T: Clone>(rows: &[T], page: usize) -> Page<T> {
+    let total = rows.len();
+    let pages = total.div_ceil(PAGE_SIZE).max(1);
+    let page = page.min(pages - 1);
+    Page { rows: rows.iter().skip(page * PAGE_SIZE).take(PAGE_SIZE).cloned().collect(), page, pages, total }
+}
+
+fn text(s: &str) -> SortKey {
+    if s.is_empty() || s == DASH { SortKey::Missing } else { SortKey::Text(s.to_string()) }
+}
+
+fn num(n: Option<i64>) -> SortKey {
+    n.map(SortKey::Num).unwrap_or(SortKey::Missing)
+}
+
+impl Sortable for QueueRow {
+    fn sort_key(&self, column: usize) -> SortKey {
+        match column {
+            0 => text(&self.key),
+            1 => text(&self.src),
+            2 => num(self.arrived_at),
+            3 => num(self.waiting_secs),
+            4 => num(self.attempt_count),
+            5 => text(&self.pending_key),
+            6 => num(self.lifecycle_secs),
+            _ => SortKey::Missing,
+        }
+    }
+}
+
+impl Sortable for StuckRow {
+    fn sort_key(&self, column: usize) -> SortKey {
+        match column {
+            0 => text(&self.document_id),
+            1 => self.rev.parse::<i64>().map(SortKey::Num).unwrap_or_else(|_| text(&self.rev)),
+            2 => num(self.pct.map(i64::from)),
+            3 => num(self.deepest_n),
+            4 => num(self.last_secs),
+            5 => text(&self.replica),
+            _ => SortKey::Missing,
+        }
+    }
+}
+
+impl Sortable for RefRow {
+    fn sort_key(&self, column: usize) -> SortKey {
+        match column {
+            0 => text(&self.set_id),
+            1 => num(self.generation_n),
+            2 => num(self.age_secs.map(|a| -a)),
+            3 => num(self.age_secs),
+            4 => num(self.row_count),
+            5 => SortKey::Num(self.waiting as i64),
+            _ => SortKey::Missing,
+        }
+    }
+}
+
+impl Sortable for DeadRow {
+    fn sort_key(&self, column: usize) -> SortKey {
+        match column {
+            0 => text(&self.key),
+            1 => num(self.parked_ts),
+            2 => text(&self.queue),
+            3 => num(self.deletes_secs),
+            4 => num(self.deliveries),
+            _ => SortKey::Missing,
+        }
+    }
+}
+
+impl Sortable for TimingRow {
+    fn sort_key(&self, column: usize) -> SortKey {
+        match column {
+            0 => text(self.step),
+            1 => num(self.p50_secs),
+            2 => num(self.p95_secs),
+            3 => SortKey::Num(self.samples as i64),
+            4 => SortKey::Num(self.in_step as i64),
+            5 => num(self.oldest_secs),
+            _ => SortKey::Missing,
+        }
+    }
+}
+
+impl Sortable for BlobCheck {
+    fn sort_key(&self, column: usize) -> SortKey {
+        match column {
+            0 => self.path.as_deref().map(text).unwrap_or(SortKey::Missing),
+            1 => num(self.size.map(|s| s as i64)),
+            2 => num(f::parse_opt(&self.last_modified).map(|t| t.timestamp())),
+            _ => SortKey::Missing,
         }
     }
 }
@@ -501,6 +696,93 @@ mod tests {
         assert!(rows[0].stalled);
         assert!(!rows[1].stalled, "4 minutes of quiet is not a stall");
         assert_eq!(rows[1].replica, "unknown");
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Row(Option<i64>);
+
+    impl Sortable for Row {
+        fn sort_key(&self, _: usize) -> SortKey {
+            num(self.0)
+        }
+    }
+
+    #[test]
+    fn sorting_flips_direction_and_keeps_unknowns_last() {
+        let rows = vec![Row(Some(2)), Row(None), Row(Some(1)), Row(Some(3))];
+        let asc = toggle(None, 0);
+        assert_eq!(sorted(&rows, Some(asc)), vec![Row(Some(1)), Row(Some(2)), Row(Some(3)), Row(None)]);
+        let desc = toggle(Some(asc), 0);
+        assert!(!desc.ascending);
+        assert_eq!(sorted(&rows, Some(desc)), vec![Row(Some(3)), Row(Some(2)), Row(Some(1)), Row(None)]);
+        assert!(toggle(Some(desc), 1).ascending, "a new column starts ascending");
+        assert_eq!(sorted(&rows, None), rows, "no sort keeps the derived order");
+    }
+
+    #[test]
+    fn pages_hold_fifty_rows_and_clamp_past_the_end() {
+        let rows: Vec<usize> = (0..120).collect();
+        let third = paginate(&rows, 2);
+        assert_eq!((third.rows.len(), third.page, third.pages, third.total, third.rows[0]), (20, 2, 3, 120, 100));
+        assert_eq!(paginate(&rows, 9).page, 2);
+        assert_eq!(paginate::<usize>(&[], 0).pages, 1);
+        assert_eq!(paginate(&rows[..50], 0).pages, 1);
+    }
+
+    #[test]
+    fn the_parked_queue_sorts_by_waiting_time() {
+        let (_, rows) = queue(&overview(), t("2026-08-14T09:00:00Z"));
+        let longest_first = sorted(&rows, Some(Sort { column: 3, ascending: false }));
+        assert_eq!(longest_first[0].key, "old");
+        let shortest_first = sorted(&rows, Some(Sort { column: 3, ascending: true }));
+        assert_eq!(shortest_first[0].key, "young");
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Label(&'static str);
+
+    impl Sortable for Label {
+        fn sort_key(&self, _: usize) -> SortKey {
+            text(self.0)
+        }
+    }
+
+    #[test]
+    fn text_sorts_case_insensitively_and_numbers_before_text() {
+        let rows = vec![Label("beta"), Label("Alpha"), Label("—"), Label("gamma")];
+        let asc = sorted(&rows, Some(Sort { column: 0, ascending: true }));
+        assert_eq!(asc, vec![Label("Alpha"), Label("beta"), Label("gamma"), Label("—")]);
+        struct Mixed(SortKey);
+        impl Clone for Mixed { fn clone(&self) -> Self { Mixed(self.0.clone()) } }
+        impl Sortable for Mixed { fn sort_key(&self, _: usize) -> SortKey { self.0.clone() } }
+        let mixed = sorted(&[Mixed(SortKey::Text("C".into())), Mixed(SortKey::Num(9))], Some(Sort { column: 0, ascending: true }));
+        assert_eq!(mixed[0].0, SortKey::Num(9));
+    }
+
+    #[test]
+    fn built_at_and_age_sort_in_opposite_directions() {
+        let mut o = overview();
+        o.references.push(RefPointer { reference_set_id: "old".into(), generation: Some(1), built_at: Some("2026-08-01T00:00:00Z".into()), ..Default::default() });
+        let rows = references(&o, t("2026-08-14T09:00:00Z"));
+        let by_built = sorted(&rows, Some(Sort { column: 2, ascending: true }));
+        let by_age = sorted(&rows, Some(Sort { column: 3, ascending: true }));
+        assert_eq!(by_built[0].set_id, "old", "oldest build first");
+        assert_eq!(by_age[0].set_id, "mdr", "youngest first");
+    }
+
+    #[test]
+    fn deepest_level_sorts_as_a_number_not_as_text() {
+        let root = |id: &str, deepest: u32| StuckRoot {
+            root: Doc { document_id: id.into(), revision_id: "10".into(), ..Default::default() },
+            deepest: Some(deepest),
+            last_progress: Some("2026-08-14T08:00:00Z".into()),
+            ..Default::default()
+        };
+        let mut o = overview();
+        o.stuck = vec![root("ten", 10), root("two", 2)];
+        let rows = stuck(&o, t("2026-08-14T09:00:00Z"));
+        assert_eq!(sorted(&rows, Some(Sort { column: 3, ascending: true }))[0].document_id, "two");
+        assert_eq!(rows[0].sort_key(1), SortKey::Num(10), "a numeric revision sorts as a number");
     }
 
     #[test]
