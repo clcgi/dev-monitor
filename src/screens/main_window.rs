@@ -18,6 +18,8 @@ pub struct MainWindowProps {
     pub theme_preference: Option<bool>,
     pub system_is_light: bool,
     pub on_theme_change: EventHandler<Option<bool>>,
+    /// Back to CDW Monitoring. This window stays mounted, so a run keeps going.
+    pub on_open_monitoring: EventHandler<()>,
 }
 
 pub enum ProcessCommand {
@@ -275,6 +277,14 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     span { class: "text-nav-link tracking-widest uppercase", "DEV Monitor" }
                 }
                 div { class: "flex items-center gap-4",
+                    button {
+                        r#type: "button",
+                        title: "CDW Monitoring",
+                        class: "text-nav-link text-white/80 hover:text-white transition-colors flex items-center gap-1",
+                        onclick: move |_| props.on_open_monitoring.call(()),
+                        i { class: "ph ph-crosshair text-sm" }
+                        span { class: "hidden sm:inline", "Monitoring" }
+                    }
                     button {
                         r#type: "button",
                         title: "Execution history",

@@ -3,6 +3,7 @@ use dioxus::desktop::LogicalSize;
 use dioxus::prelude::*;
 
 mod components;
+mod monitoring;
 mod screens;
 mod services;
 
@@ -48,8 +49,21 @@ fn main() {
     }
 }
 
+/// In flow, so the update banner still paints above it.
+const VISIBLE_LAYER: &str = "display:block";
+/// Full size and inert: invisible, unfocusable, and passes clicks through.
+const HIDDEN_LAYER: &str = "position:absolute;inset:0;visibility:hidden;pointer-events:none;overflow:hidden";
+
+/// Monitoring is the primary experience; the script runner is one click away.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Experience {
+    Monitoring,
+    Developer,
+}
+
 #[component]
 fn App() -> Element {
+    let mut experience = use_signal(|| Experience::Monitoring);
     let mut system_is_light = use_signal(|| dark_light::detect() != dark_light::Mode::Dark);
     // None follows the OS; Some(_) is the user's explicit choice.
     let mut theme_preference = use_signal(|| Option::<bool>::None);
@@ -115,6 +129,7 @@ fn App() -> Element {
         }
     });
 
+    let monitoring = *experience.read() == Experience::Monitoring;
     let stylesheet = use_hook(|| format!("{PHOSPHOR_CSS}\n{TAILWIND_CSS}"));
     let is_light = theme_preference.read().unwrap_or(*system_is_light.read());
     let theme_class = if is_light {
@@ -138,13 +153,25 @@ fn App() -> Element {
                 on_open_page: move |u: services::updates::Update| { let _ = open::that(&u.url); },
                 on_dismiss: move |_| update.set(UpdateUi::Hidden),
             }
-            screens::main_window::MainWindow {
-                show_auth_reminder,
-                pending_update: pending.read().clone(),
-                on_show_update: move |u| update.set(UpdateUi::Offered(u)),
-                theme_preference: *theme_preference.read(),
-                system_is_light: *system_is_light.read(),
-                on_theme_change: move |pref| theme_preference.set(pref),
+            // Both stay mounted and only one is shown: unmounting the Developer
+            // Monitor would kill a script run and lose its logs.
+            // The hidden one stays laid out (visibility, not display:none): the
+            // Developer Monitor's log view must keep following its tail meanwhile.
+            div { style: if monitoring { VISIBLE_LAYER } else { HIDDEN_LAYER },
+                monitoring::ui::MonitoringApp {
+                    on_open_developer: move |_| experience.set(Experience::Developer),
+                }
+            }
+            div { style: if monitoring { HIDDEN_LAYER } else { VISIBLE_LAYER },
+                screens::main_window::MainWindow {
+                    show_auth_reminder,
+                    pending_update: pending.read().clone(),
+                    on_show_update: move |u| update.set(UpdateUi::Offered(u)),
+                    theme_preference: *theme_preference.read(),
+                    system_is_light: *system_is_light.read(),
+                    on_theme_change: move |pref| theme_preference.set(pref),
+                    on_open_monitoring: move |_| experience.set(Experience::Monitoring),
+                }
             }
         }
     }
