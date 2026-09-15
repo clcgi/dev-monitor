@@ -120,13 +120,11 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                             e.step_started = Some(Local::now());
                                                         }
                                                         e.active_step = Some(step.clone());
-                                                        complete_up_to(&mut e.step_history, &step, &catalog);
                                                     }
                                                     // Completion does NOT move the cursor.
                                                     Some(Marker::StepDone(step)) => {
                                                         let mut s = state.write();
                                                         let e = s.entry(&script);
-                                                        complete_up_to(&mut e.step_history, &step, &catalog);
                                                         if !e.step_history.contains(&step) {
                                                             e.step_history.push(step);
                                                         }
@@ -517,13 +515,3 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
     }
 }
 
-fn complete_up_to(history: &mut Vec<StepId>, step: &str, catalog: &StepCatalog) {
-    let Some(idx) = catalog.chain_index(step) else {
-        return;
-    };
-    for earlier in catalog.chain().iter().take(idx) {
-        if !history.contains(&earlier.id) {
-            history.push(earlier.id.clone());
-        }
-    }
-}

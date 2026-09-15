@@ -32,8 +32,6 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
     let mut current_idx = 0;
     if let Some(active) = &props.active_step {
         current_idx = all_steps.iter().position(|s| s == active).unwrap_or(0);
-    } else if props.is_succeeded {
-        current_idx = all_steps.len() - 1;
     } else if !props.is_running && !props.is_failed {
         current_idx = 0; // Idle
     }
@@ -46,22 +44,8 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
         .is_some_and(|id| props.catalog.chain_index(id).is_none());
 
     // Status is now a VALUE, not a class name.
-    #[derive(PartialEq, Clone, Copy)]
-    enum NodeState { Completed, Active, Failed, Zone, Pending }
-
-    let state_of = |step: &StepId, idx: usize| -> NodeState {
-        if let Some(active) = &props.active_step {
-            if step == active {
-                if props.is_failed { return NodeState::Failed; }
-                if props.is_succeeded { return NodeState::Completed; }
-                if is_zone { return NodeState::Zone; }
-                return NodeState::Active;
-            }
-        }
-        if props.step_history.contains(step) || idx < current_idx || props.is_succeeded {
-            return NodeState::Completed;
-        }
-        NodeState::Pending
+    let state_of = |step: &StepId, _idx: usize| -> NodeState {
+        node_state(step, props.active_step.as_deref(), &props.step_history, props.is_failed, is_zone)
     };
 
 
@@ -161,9 +145,8 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
 
                     if idx < all_steps.len() - 1 {
                         {
-                            let done = idx + 1 <= current_idx
-                                || props.step_history.contains(&all_steps[idx + 1])
-                                || props.is_succeeded;
+                            let done = props.step_history.contains(&all_steps[idx])
+                                && props.step_history.contains(&all_steps[idx + 1]);
                             // THE SEGMENT BEING TRAVELLED. Exactly one connector is in flight at a time.
                             let in_flight = props.is_running && !done && idx == current_idx;
                             // Computed here rather than as an `if/else if` chain inside the attribute.
@@ -211,5 +194,44 @@ fn format_elapsed(secs: u64) -> String {
         format!("{secs}s")
     } else {
         format!("{}m {:02}s", secs / 60, secs % 60)
+    }
+}
+
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum NodeState { Completed, Active, Failed, Zone, Pending }
+
+// Completion requires a DONE marker. Neither process success nor a later
+// stage provides evidence for a skipped stage.
+fn node_state(step: &str, active: Option<&str>, completed: &[StepId], failed: bool, zone: bool) -> NodeState {
+    if completed.iter().any(|id| id == step) { return NodeState::Completed; }
+    if active == Some(step) {
+        if failed { return NodeState::Failed; }
+        if zone { return NodeState::Zone; }
+        return NodeState::Active;
+    }
+    NodeState::Pending
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    #[test]
+    fn reaching_a_later_stage_does_not_complete_unobserved_stages() {
+        assert_eq!(node_state("raw", Some("curated"), &[], false, false), NodeState::Pending);
+    }
+
+    #[test]
+    fn a_successful_process_does_not_complete_its_unverified_active_stage() {
+        assert_eq!(node_state("curated", Some("curated"), &[], false, false), NodeState::Active);
+    }
+
+    #[test]
+    fn only_explicit_completions_turn_green() {
+        let done = vec!["raw".to_owned()];
+        assert_eq!(node_state("raw", Some("processing"), &done, true, false), NodeState::Completed);
+        assert_eq!(node_state("processing", Some("processing"), &done, true, false), NodeState::Failed);
+        assert_eq!(node_state("curated", Some("processing"), &done, true, false), NodeState::Pending);
     }
 }
