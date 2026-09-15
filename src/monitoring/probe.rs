@@ -52,6 +52,24 @@ pub fn azure_config_dir(env: &str, home: &std::path::Path) -> Option<PathBuf> {
         .find(|dir| dir.is_dir())
 }
 
+pub fn login_commands(env: &str) -> String {
+    login_commands_for(env, dirs::home_dir().as_deref())
+}
+
+fn login_commands_for(env: &str, home: Option<&std::path::Path>) -> String {
+    let mut lines = Vec::new();
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if std::path::Path::new("/opt/homebrew/bin/az").is_file() {
+        lines.push("export PATH='/opt/homebrew/bin':\"$PATH\"".to_string());
+    }
+    if let Some(dir) = home.and_then(|home| azure_config_dir(env, home)) {
+        lines.push(format!("export AZURE_CONFIG_DIR={}", quote(&dir.to_string_lossy())));
+    }
+    lines.push("az login".to_string());
+    lines.push(format!("az account set --subscription <the {env} subscription>"));
+    lines.join("\n")
+}
+
 pub fn command_line(env: &str, request: &Request) -> String {
     let probe = std::env::var_os(PROBE_OVERRIDE)
         .map(PathBuf::from)
@@ -96,7 +114,16 @@ pub async fn run<T: DeserializeOwned>(env: &str, request: Request) -> Probe<T> {
         Ok(Err(e)) => return Probe::Error { message: format!("Could not start the probe: {e}") },
         Ok(Ok(out)) => out,
     };
-    parse(&String::from_utf8_lossy(&output.stdout), &String::from_utf8_lossy(&output.stderr))
+    let result = parse(&String::from_utf8_lossy(&output.stdout), &String::from_utf8_lossy(&output.stderr));
+    let status = match &result {
+        Probe::Ok { .. } => "ok",
+        Probe::Auth { .. } => "auth",
+        Probe::Unavailable { .. } => "unavailable",
+        Probe::Error { .. } => "error",
+    };
+    // Diagnose the actual desktop subprocess without logging document data or credentials.
+    eprintln!("Monitoring probe ({env}): {status}");
+    result
 }
 
 /// The LAST line is the document: SDK warnings may precede it on stdout.
@@ -229,6 +256,18 @@ mod tests {
         std::fs::create_dir_all(home.join(".azure/sbm-DEV")).unwrap();
         assert_eq!(azure_config_dir("stg", &home), None);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn sign_in_instructions_target_the_same_profile_as_the_probe() {
+        let home = scratch_home("login");
+        std::fs::create_dir_all(home.join(".azure/sbm-DEV")).unwrap();
+        let instructions = login_commands_for("dev", Some(&home));
+        let profile = azure_config_dir("dev", &home).unwrap();
+        assert!(instructions.contains(&format!("export AZURE_CONFIG_DIR={}", quote(&profile.to_string_lossy()))));
+        assert!(instructions.find("AZURE_CONFIG_DIR").unwrap() < instructions.find("az login").unwrap());
+        assert!(!login_commands_for("stg", Some(&home)).contains("AZURE_CONFIG_DIR"));
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
