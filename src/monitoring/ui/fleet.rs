@@ -102,12 +102,12 @@ pub fn QueueScreen(kpis: Vec<Kpi>, rows: Vec<QueueRow>, current: String, refresh
                     }
                     for r in rows {
                         {
-                            let id = r.document_id.clone();
+                            let id = r.file_guid.clone();
                             let selected = !current.is_empty() && r.document_id == current;
                             let row_bg = if selected { SELECTED_BG } else { "transparent" };
                             rsx! {
                                 div {
-                                    key: "{r.document_id}-{r.arrived}",
+                                    key: "{r.document_id}-{r.file_guid}",
                                     class: if selected { "cdwm-row cdwm-selected" } else { "cdwm-row" },
                                     title: "Trace {r.document_id}",
                                     style: "display:grid;grid-template-columns:{columns};gap:9px;padding:9px 18px;border-bottom:1px solid {ROW_RULE};align-items:center;cursor:pointer;background:{row_bg};min-width:1060px",
@@ -152,13 +152,13 @@ pub fn StuckScreen(rows: Vec<StuckRow>, refreshing: bool, on_trace: EventHandler
                     }
                     for r in rows {
                         {
-                            let id = r.document_id.clone();
+                            let id = r.file_guid.clone();
                             let bar_width = r.pct.map(|p| format!("{p}%")).unwrap_or_else(|| "0%".into());
                             let written_fg = if r.stalled { CORAL } else { AMBER };
                             let track = if r.stalled { "#F4DEE0" } else { "#F0E4C8" };
                             rsx! {
                                 div {
-                                    key: "{r.document_id}-{r.rev}",
+                                    key: "{r.document_id}-{r.file_guid}",
                                     class: "cdwm-row",
                                     title: "Trace {r.document_id}",
                                     style: "display:grid;grid-template-columns:{columns};gap:9px;padding:11px 18px;border-bottom:1px solid {ROW_RULE};align-items:center;cursor:pointer;min-width:1000px",

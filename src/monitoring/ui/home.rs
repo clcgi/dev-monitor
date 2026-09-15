@@ -58,35 +58,35 @@ pub fn TracePrompt(overview: Option<Overview>, env_name: String, on_trace: Event
     let body = format!("{}line-height:1.7;color:{TEXT_BODY};margin-top:6px", sans(400, 12.5));
     let key = format!("{}color:{CYAN};overflow-wrap:anywhere;flex:1;min-width:0", mono(500, 12.0));
     let meta = format!("{}color:{DIM};flex-shrink:0", mono(400, 10.5));
-    let parked: Vec<(String, String, String)> = overview
+    let parked: Vec<(String, String, String, String)> = overview
         .as_ref()
         .map(|o| {
             o.parked
                 .iter()
                 .take(6)
-                .map(|d| (d.document_id.clone(), d.display_key().to_string(), fmt::or_dash(d.pending_attempts.map(|a| format!("{a} tries")))))
+                .map(|d| (d.file_guid.clone(), d.document_id.clone(), d.display_key().to_string(), fmt::or_dash(d.pending_attempts.map(|a| format!("{a} tries")))))
                 .collect()
         })
         .unwrap_or_default();
-    let extracting: Vec<(String, String, String)> = overview
+    let extracting: Vec<(String, String, String, String)> = overview
         .as_ref()
         .map(|o| {
             o.stuck
                 .iter()
                 .take(6)
-                .map(|s| (s.root.document_id.clone(), s.root.display_key().to_string(), format!("{} written", s.members_written)))
+                .map(|s| (s.root.file_guid.clone(), s.root.document_id.clone(), s.root.display_key().to_string(), format!("{} written", s.members_written)))
                 .collect()
         })
         .unwrap_or_default();
-    let pick = |rows: Vec<(String, String, String)>, empty: &'static str| {
+    let pick = |rows: Vec<(String, String, String, String)>, empty: &'static str| {
         rsx! {
             if rows.is_empty() { EmptyRow { text: empty.to_string() } }
-            for (id, label, note) in rows {
+            for (file_guid, id, label, note) in rows {
                 div {
-                    key: "{id}",
+                    key: "{id}-{file_guid}",
                     class: "cdwm-row",
                     style: "display:flex;align-items:center;gap:11px;padding:9px 18px;border-bottom:1px solid {ROW_RULE};cursor:pointer",
-                    onclick: move |_| on_trace.call(id.clone()),
+                    onclick: move |_| on_trace.call(file_guid.clone()),
                     span { style: "{key}", "{label}" }
                     span { style: "{meta}", "{note}" }
                 }

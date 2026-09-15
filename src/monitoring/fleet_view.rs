@@ -39,6 +39,7 @@ fn landing_deletes_at(doc: &Doc, retention_days: i64) -> Option<DateTime<Utc>> {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct QueueRow {
+    pub file_guid: String,
     pub key: String,
     pub document_id: String,
     pub src: String,
@@ -75,6 +76,7 @@ pub fn queue(o: &Overview, now: DateTime<Utc>) -> (Vec<Kpi>, Vec<QueueRow>) {
             let since = f::parse_opt(&d.pending_since);
             let (lifecycle, hot) = next_lifecycle(o, d, now).unwrap_or_else(|| (DASH.into(), false));
             QueueRow {
+                file_guid: d.file_guid.clone(),
                 key: d.display_key().to_string(),
                 document_id: d.document_id.clone(),
                 src: f::or_dash(Some(d.source_system.clone())),
@@ -138,6 +140,7 @@ fn reference_for_parked(o: &Overview) -> Option<&super::model::RefPointer> {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct StuckRow {
+    pub file_guid: String,
     pub document_id: String,
     pub key: String,
     pub rev: String,
@@ -167,6 +170,7 @@ pub fn stuck(o: &Overview, now: DateTime<Utc>) -> Vec<StuckRow> {
             let total = listed.map(|e| e.entries.iter().filter(|x| !x.container && x.rejected.is_none()).count());
             let max_depth = listed.and_then(|e| e.entries.iter().map(|x| x.depth).max());
             StuckRow {
+                file_guid: s.root.file_guid.clone(),
                 document_id: s.root.document_id.clone(),
                 key: s.root.display_key().to_string(),
                 rev: f::or_dash(Some(s.root.revision_id.clone())),

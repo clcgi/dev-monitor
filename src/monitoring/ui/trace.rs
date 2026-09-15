@@ -154,10 +154,10 @@ pub fn TraceScreen(
                             button { r#type: "button", style: "{segmented(true)}", title: "The document traced for “{query}”", "{current_tab}" }
                             for c in view.candidates.clone() {
                                 {
-                                    let id = c.document_id.clone();
+                                    let id = c.file_guid.clone();
                                     rsx! {
                                         button {
-                                            key: "{c.document_id}-{c.revision}",
+                                            key: "{c.document_id}-{c.file_guid}",
                                             r#type: "button",
                                             title: "{c.state} · registered {c.registered}",
                                             style: "{segmented(false)}",
