@@ -1,6 +1,5 @@
 use super::kit::*;
-use super::Screen;
-use crate::monitoring::fleet_view::{DeadRow, Kpi, QueueRow, RefRow, StuckRow, TimingRow};
+use crate::monitoring::fleet_view::{paginate, sorted, toggle, DeadRow, Kpi, QueueRow, RefRow, Sort, StuckRow, TimingRow, PAGE_SIZE};
 use crate::monitoring::format as fmt;
 use crate::monitoring::model::DeadLetters;
 use crate::monitoring::tokens::*;
@@ -31,7 +30,6 @@ fn KpiCard(kpi: Kpi) -> Element {
     let unit = format!("{}color:{DIM}", mono(400, 10.5));
     rsx! {
         div { style: "border:1px solid {BORDER};border-radius:14px;background:{CARD};padding:14px 16px;position:relative;min-width:0",
-            div { style: "position:absolute;top:-1px;left:-1px;width:9px;height:9px;border-top:1px solid {fg};border-left:1px solid {fg}" }
             div { style: "{label}", "{kpi.label}" }
             div { style: "display:flex;align-items:baseline;gap:7px;margin-top:7px;flex-wrap:wrap",
                 span { style: "{value}", "{kpi.value}" }
@@ -72,6 +70,10 @@ fn Explainer(icon: &'static str, title: String, answers: String, why: String) ->
 
 #[component]
 pub fn QueueScreen(kpis: Vec<Kpi>, rows: Vec<QueueRow>, current: String, refreshing: bool, on_trace: EventHandler<String>) -> Element {
+    let mut sort = use_signal(|| Option::<Sort>::None);
+    // Open on the page holding the document just traced, so Back lands on its row.
+    let mut page = use_signal(|| rows.iter().position(|r| r.document_id == current).map_or(0, |i| i / PAGE_SIZE));
+    let shown = paginate(&sorted(&rows, sort()), page());
     let columns = "2.1fr .7fr 1.2fr .9fr .7fr 2fr 1.2fr";
     let head = vec![
         ("DOCUMENT NUMBER".to_string(), false),
@@ -91,23 +93,23 @@ pub fn QueueScreen(kpis: Vec<Kpi>, rows: Vec<QueueRow>, current: String, refresh
                 body: "Every document here arrived intact. Its business metadata has not yet reached the platform's reference data, which refreshes nightly from the lakehouse. The lookup re-runs after every refresh and needs no caller action — until the pending budget or the landing lifecycle runs out.".to_string(),
             }
             if refreshing { SweepBar { color: AMBER.to_string(), track: RULE.to_string() } }
-            div { style: "display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px",
-                for k in kpis { KpiCard { key: "{k.label}", kpi: k } }
+            div { class: "cdwm-kpis", style: "display:grid;gap:12px",
+                for k in kpis { KpiCard { key: "{k.label}", kpi: k.clone() } }
             }
-            Panel { icon: "tray", title: "The parked queue".to_string(), subtitle: "oldest first".to_string(), right: format!("{} rows", rows.len()),
+            Panel { icon: "tray", title: "The parked queue".to_string(), subtitle: if sort().is_none() { "oldest first".to_string() } else { "sorted by column".to_string() }, right: format!("{} rows", rows.len()),
                 div { style: "overflow-x:auto",
-                    GridHead { columns: columns.to_string(), min_width: 1060, labels: head }
+                    GridHead { columns: columns.to_string(), min_width: 1060, labels: head, sort: sort(), on_sort: move |c: usize| { sort.set(Some(toggle(sort(), c))); page.set(0); } }
                     if rows.is_empty() {
                         EmptyRow { text: "Nothing is parked. Every document with a metadata prerequisite has resolved.".to_string() }
                     }
-                    for r in rows {
+                    for (i, r) in shown.rows.clone().into_iter().enumerate() {
                         {
                             let id = r.file_guid.clone();
                             let selected = !current.is_empty() && r.document_id == current;
                             let row_bg = if selected { SELECTED_BG } else { "transparent" };
                             rsx! {
                                 div {
-                                    key: "{r.document_id}-{r.file_guid}",
+                                    key: "{r.document_id}-{r.file_guid}-{i}",
                                     class: if selected { "cdwm-row cdwm-selected" } else { "cdwm-row" },
                                     title: "Trace {r.document_id}",
                                     style: "display:grid;grid-template-columns:{columns};gap:9px;padding:9px 18px;border-bottom:1px solid {ROW_RULE};align-items:center;cursor:pointer;background:{row_bg};min-width:1060px",
@@ -123,8 +125,9 @@ pub fn QueueScreen(kpis: Vec<Kpi>, rows: Vec<QueueRow>, current: String, refresh
                             }
                         }
                     }
-                    Footnote { text: "Read from the catalog just now. pendingKey is shown because it is the only thing an operator can hand to the lakehouse team. Lifecycle names whichever comes first: the sweeper's quarantine or the landing delete, which writes nothing.".to_string() }
                 }
+                    Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| page.set(p) }
+                    Footnote { text: "Read from the catalog just now. pendingKey is shown because it is the only thing an operator can hand to the lakehouse team. Lifecycle names whichever comes first: the sweeper's quarantine or the landing delete, which writes nothing.".to_string() }
             }
         }
     }
@@ -132,6 +135,9 @@ pub fn QueueScreen(kpis: Vec<Kpi>, rows: Vec<QueueRow>, current: String, refresh
 
 #[component]
 pub fn StuckScreen(rows: Vec<StuckRow>, refreshing: bool, on_trace: EventHandler<String>) -> Element {
+    let mut sort = use_signal(|| Option::<Sort>::None);
+    let mut page = use_signal(|| 0usize);
+    let shown = paginate(&sorted(&rows, sort()), page());
     let columns = "2fr .5fr 1fr 1.2fr 1.1fr 1.3fr";
     let walking = format!("{}letter-spacing:.1em;text-transform:uppercase;padding:1px 6px;border:1px solid {WARN_BD};color:{AMBER};margin-left:8px", mono(500, 8.5));
     rsx! {
@@ -143,14 +149,14 @@ pub fn StuckScreen(rows: Vec<StuckRow>, refreshing: bool, on_trace: EventHandler
                 body: format!("A Job replica that vanishes mid-walk writes no failure event — the signal is the absence of progress, so this view is built on each member's last write rather than on state alone. A walk silent for more than {} minutes with no live lease is stalled.", crate::monitoring::trace_view::STALL_AFTER_MINUTES),
             }
             if refreshing { SweepBar { color: CORAL.to_string(), track: RULE.to_string() } }
-            Panel { icon: "pause-circle", icon_color: CORAL.to_string(), title: "Stuck extractions".to_string(), subtitle: "ordered by time since the last member was written".to_string(),
+            Panel { icon: "pause-circle", icon_color: CORAL.to_string(), title: "Stuck extractions".to_string(), subtitle: if sort().is_none() { "ordered by time since the last member was written".to_string() } else { "sorted by column".to_string() },
                 right: format!("{} stalled / {} extracting", rows.iter().filter(|r| r.stalled).count(), rows.len()),
                 div { style: "overflow-x:auto",
-                    GridHead { columns: columns.to_string(), min_width: 1000, labels: labels(&["ROOT DOCUMENTID", "REV", "WRITTEN", "DEEPEST REACHED", "LAST PROGRESS", "JOB REPLICA"]) }
+                    GridHead { columns: columns.to_string(), min_width: 1000, labels: labels(&["ROOT DOCUMENTID", "REV", "WRITTEN", "DEEPEST REACHED", "LAST PROGRESS", "JOB REPLICA"]), sort: sort(), on_sort: move |c: usize| { sort.set(Some(toggle(sort(), c))); page.set(0); } }
                     if rows.is_empty() {
                         EmptyRow { text: "No archive root is on Extracting. Nothing is mid-walk.".to_string() }
                     }
-                    for r in rows {
+                    for (i, r) in shown.rows.clone().into_iter().enumerate() {
                         {
                             let id = r.file_guid.clone();
                             let bar_width = r.pct.map(|p| format!("{p}%")).unwrap_or_else(|| "0%".into());
@@ -158,7 +164,7 @@ pub fn StuckScreen(rows: Vec<StuckRow>, refreshing: bool, on_trace: EventHandler
                             let track = if r.stalled { "#F4DEE0" } else { "#F0E4C8" };
                             rsx! {
                                 div {
-                                    key: "{r.document_id}-{r.file_guid}",
+                                    key: "{r.document_id}-{r.file_guid}-{i}",
                                     class: "cdwm-row",
                                     title: "Trace {r.document_id}",
                                     style: "display:grid;grid-template-columns:{columns};gap:9px;padding:11px 18px;border-bottom:1px solid {ROW_RULE};align-items:center;cursor:pointer;min-width:1000px",
@@ -181,15 +187,19 @@ pub fn StuckScreen(rows: Vec<StuckRow>, refreshing: bool, on_trace: EventHandler
                             }
                         }
                     }
-                    Footnote { text: "Read-only. Requeue and replay are each their own decision about mutating a live environment, and are out of scope. The expected member count comes from reading the archive's own listing; \"?\" means it could not be read.".to_string() }
                 }
+                    Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| page.set(p) }
+                    Footnote { text: "Read-only. Requeue and replay are each their own decision about mutating a live environment, and are out of scope. The expected member count comes from reading the archive's own listing; \"?\" means it could not be read.".to_string() }
             }
         }
     }
 }
 
 #[component]
-pub fn RefsScreen(rows: Vec<RefRow>, refreshing: bool, on_go: EventHandler<Screen>) -> Element {
+pub fn RefsScreen(rows: Vec<RefRow>, refreshing: bool) -> Element {
+    let mut sort = use_signal(|| Option::<Sort>::None);
+    let mut page = use_signal(|| 0usize);
+    let shown = paginate(&sorted(&rows, sort()), page());
     let columns = "1.4fr .8fr 1.4fr .9fr .8fr 1fr 2.2fr";
     rsx! {
         div { style: "display:flex;flex-direction:column;gap:16px;max-width:1620px",
@@ -202,11 +212,11 @@ pub fn RefsScreen(rows: Vec<RefRow>, refreshing: bool, on_go: EventHandler<Scree
             if refreshing { SweepBar { color: CYAN.to_string(), track: RULE.to_string() } }
             Panel { icon: "arrows-clockwise", title: "Reference pointers".to_string(), subtitle: "one row per referenceSets document".to_string(),
                 div { style: "overflow-x:auto",
-                    GridHead { columns: columns.to_string(), min_width: 1000, labels: labels(&["REFERENCE SET", "GENERATION", "BUILT AT", "AGE", "ROWS", "DOCUMENTS WAITING", "NOTE"]) }
+                    GridHead { columns: columns.to_string(), min_width: 1000, labels: labels(&["REFERENCE SET", "GENERATION", "BUILT AT", "AGE", "ROWS", "DOCUMENTS WAITING", "NOTE"]), fixed: vec![6], sort: sort(), on_sort: move |c: usize| { sort.set(Some(toggle(sort(), c))); page.set(0); } }
                     if rows.is_empty() {
                         EmptyRow { text: "No reference sets are configured in this environment, so nothing waits on reference data.".to_string() }
                     }
-                    for r in rows {
+                    for r in shown.rows.clone() {
                         {
                             let fg = tone_fg(r.tone);
                             let waiting_style = cell(400, 11.5, if r.waiting > 0 { AMBER } else { DIM });
@@ -224,19 +234,22 @@ pub fn RefsScreen(rows: Vec<RefRow>, refreshing: bool, on_go: EventHandler<Scree
                             }
                         }
                     }
-                    Footnote { text: "Read from the reference container's {set}/current.json. A generation becomes visible only when this pointer flips, so its builtAt is when the platform could first resolve against it.".to_string() }
                 }
-            }
-            div { style: "display:flex;gap:10px",
-                ActionButton { label: "Parked queue".to_string(), icon: "tray", primary: true, onclick: move |_| on_go.call(Screen::Queue) }
-                ActionButton { label: "Stuck extractions".to_string(), icon: "pause-circle", primary: false, onclick: move |_| on_go.call(Screen::Stuck) }
+                    Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| page.set(p) }
+                    Footnote { text: "Read from the reference container's {set}/current.json. A generation becomes visible only when this pointer flips, so its builtAt is when the platform could first resolve against it.".to_string() }
             }
         }
     }
 }
 
 #[component]
-pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_trace: EventHandler<String>, on_go: EventHandler<Screen>) -> Element {
+pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_trace: EventHandler<String>) -> Element {
+    let mut sort = use_signal(|| Option::<Sort>::None);
+    let mut page = use_signal(|| 0usize);
+    let shown = paginate(&sorted(&rows, sort()), page());
+    let mut eg_sort = use_signal(|| Option::<Sort>::None);
+    let mut eg_page = use_signal(|| 0usize);
+    let eg_shown = paginate(&sorted(&data.event_grid, eg_sort()), eg_page());
     let columns = "2fr 1.1fr 1.2fr 1.2fr 1.8fr";
     let queue_kpis: Vec<Kpi> = data
         .queues
@@ -271,13 +284,13 @@ pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_tr
             for e in errors {
                 Banner { tone: Tone::Warn, icon: "plugs", title: "Partly unreadable".to_string(), body: e }
             }
-            Panel { icon: "trash", icon_color: CORAL.to_string(), title: "Dead-lettered notifications".to_string(), subtitle: "oldest first".to_string(), right: format!("{} peeked", rows.len()),
+            Panel { icon: "trash", icon_color: CORAL.to_string(), title: "Dead-lettered notifications".to_string(), subtitle: if sort().is_none() { "oldest first".to_string() } else { "sorted by column".to_string() }, right: format!("{} peeked", rows.len()),
                 div { style: "overflow-x:auto",
-                    GridHead { columns: columns.to_string(), min_width: 980, labels: labels(&["DOCUMENT NUMBER", "PARKED AT", "NOTIFICATION QUEUE", "LANDING DELETES", "RETRY STATE"]) }
+                    GridHead { columns: columns.to_string(), min_width: 980, labels: labels(&["DOCUMENT NUMBER", "PARKED AT", "NOTIFICATION QUEUE", "LANDING DELETES", "RETRY STATE"]), sort: sort(), on_sort: move |c: usize| { sort.set(Some(toggle(sort(), c))); page.set(0); } }
                     if rows.is_empty() {
                         EmptyRow { text: "No dead-lettered message could be peeked on any notification queue.".to_string() }
                     }
-                    for (i, r) in rows.into_iter().enumerate() {
+                    for (i, r) in shown.rows.clone().into_iter().enumerate() {
                         {
                             let id = r.document_id.clone();
                             let clickable = id.is_some();
@@ -285,7 +298,7 @@ pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_tr
                             let key_style = cell(500, 12.0, if clickable { BLUE } else { TEXT_STRONG });
                             rsx! {
                                 div {
-                                    key: "{i}",
+                                    key: "{r.queue}-{r.sequence:?}-{i}",
                                     class: if clickable { "cdwm-row" } else { "" },
                                     style: "display:grid;grid-template-columns:{columns};gap:9px;padding:9px 18px;border-bottom:1px solid {ROW_RULE};align-items:center;cursor:{cursor};min-width:980px",
                                     onclick: move |_| if let Some(id) = id.clone() { on_trace.call(id) },
@@ -298,16 +311,17 @@ pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_tr
                             }
                         }
                     }
-                    Footnote { text: "Peeked, never received: nothing here settles, requeues or replays a message.".to_string() }
                 }
+                    Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| page.set(p) }
+                    Footnote { text: "Peeked, never received: nothing here settles, requeues or replays a message.".to_string() }
             }
             Panel { icon: "archive-box", title: "Event Grid dead letters".to_string(), subtitle: "deliveries that never reached a queue".to_string(), right: format!("{} blobs", data.event_grid.len()),
                 div { style: "overflow-x:auto",
-                    GridHead { columns: eg_columns.to_string(), min_width: 760, labels: labels(&["BLOB", "SIZE", "WRITTEN"]) }
+                    GridHead { columns: eg_columns.to_string(), min_width: 760, labels: labels(&["BLOB", "SIZE", "WRITTEN"]), sort: eg_sort(), on_sort: move |c: usize| { eg_sort.set(Some(toggle(eg_sort(), c))); eg_page.set(0); } }
                     if data.event_grid.is_empty() {
                         EmptyRow { text: "The Event Grid dead-letter container holds nothing (or does not exist here).".to_string() }
                     }
-                    for b in data.event_grid.clone() {
+                    for b in eg_shown.rows.clone() {
                         div { key: "{b.path:?}", style: "display:grid;grid-template-columns:{eg_columns};gap:9px;padding:9px 18px;border-bottom:1px solid {ROW_RULE};align-items:center;min-width:760px",
                             span { style: "{cell(400, 11.0, TEXT_STRONG)}", {b.path.clone().unwrap_or_default()} }
                             span { style: "{cell(400, 11.0, DIM)}", {b.size.map(fmt::bytes).unwrap_or_default()} }
@@ -315,17 +329,16 @@ pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_tr
                         }
                     }
                 }
-            }
-            div { style: "display:flex;gap:10px",
-                ActionButton { label: "Parked queue".to_string(), icon: "tray", primary: true, onclick: move |_| on_go.call(Screen::Queue) }
-                ActionButton { label: "Stuck extractions".to_string(), icon: "pause-circle", primary: false, onclick: move |_| on_go.call(Screen::Stuck) }
+                    Pager { page: eg_shown.page, pages: eg_shown.pages, total: eg_shown.total, on_page: move |p| eg_page.set(p) }
             }
         }
     }
 }
 
 #[component]
-pub fn TimingScreen(rows: Vec<TimingRow>, documents: usize, truncated: bool, refreshing: bool, on_go: EventHandler<Screen>) -> Element {
+pub fn TimingScreen(rows: Vec<TimingRow>, documents: usize, truncated: bool, refreshing: bool) -> Element {
+    let mut sort = use_signal(|| Option::<Sort>::None);
+    let shown = sorted(&rows, sort());
     let columns = "1.8fr .9fr .9fr .8fr 1fr 1fr";
     rsx! {
         div { style: "display:flex;flex-direction:column;gap:16px;max-width:1620px",
@@ -341,6 +354,8 @@ pub fn TimingScreen(rows: Vec<TimingRow>, documents: usize, truncated: bool, ref
                     GridHead {
                         columns: columns.to_string(),
                         min_width: 900,
+                        sort: sort(),
+                        on_sort: move |c: usize| sort.set(Some(toggle(sort(), c))),
                         labels: vec![
                             ("STEP".to_string(), false),
                             ("P50 DWELL".to_string(), false),
@@ -350,7 +365,7 @@ pub fn TimingScreen(rows: Vec<TimingRow>, documents: usize, truncated: bool, ref
                             ("OLDEST IN STEP".to_string(), false),
                         ],
                     }
-                    for r in rows {
+                    for r in shown {
                         {
                             let step_style = format!("{}color:{TEXT_STRONG}", sans(500, 12.5));
                             let in_step_style = format!("{};text-align:right;padding-right:16px", cell(500, 12.0, if r.in_step > 0 { AMBER } else { DIM }));
@@ -373,10 +388,6 @@ pub fn TimingScreen(rows: Vec<TimingRow>, documents: usize, truncated: bool, ref
                         ),
                     }
                 }
-            }
-            div { style: "display:flex;gap:10px",
-                ActionButton { label: "Parked queue".to_string(), icon: "tray", primary: true, onclick: move |_| on_go.call(Screen::Queue) }
-                ActionButton { label: "Stuck extractions".to_string(), icon: "pause-circle", primary: false, onclick: move |_| on_go.call(Screen::Stuck) }
             }
         }
     }

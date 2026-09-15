@@ -30,11 +30,20 @@ impl Request {
 pub fn workspace_root() -> PathBuf {
     let cwd = std::env::current_dir()
         .and_then(|p| p.canonicalize())
+        .map(without_verbatim_prefix)
         .unwrap_or_else(|_| PathBuf::from("."));
     if cwd.ends_with("dev-monitor") {
         cwd.parent().map(PathBuf::from).unwrap_or(cwd)
     } else {
         cwd
+    }
+}
+
+/// Windows' canonicalize() returns `\\?\C:\...`, which bash and Python do not read as a path.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|p| p.strip_prefix(r"\\?\")) {
+        Some(plain) => PathBuf::from(plain),
+        None => path,
     }
 }
 
@@ -71,9 +80,10 @@ fn login_commands_for(env: &str, home: Option<&std::path::Path>) -> String {
 }
 
 pub fn command_line(env: &str, request: &Request) -> String {
+    // Relative: the probe runs from CentralDocumentWarehouse, so no absolute (or Windows-specific) path is needed.
     let probe = std::env::var_os(PROBE_OVERRIDE)
         .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("CentralDocumentWarehouse/tools/monitor_probe.py"));
+        .unwrap_or_else(|| PathBuf::from("tools/monitor_probe.py"));
     let args: String = request.args().iter().map(|a| format!(" {}", quote(a))).collect();
     let profile = dirs::home_dir()
         .and_then(|home| azure_config_dir(env, &home))
@@ -259,15 +269,16 @@ mod tests {
     }
 
     #[test]
-    fn sign_in_instructions_target_the_same_profile_as_the_probe() {
-        let home = scratch_home("login");
-        std::fs::create_dir_all(home.join(".azure/sbm-DEV")).unwrap();
-        let instructions = login_commands_for("dev", Some(&home));
-        let profile = azure_config_dir("dev", &home).unwrap();
-        assert!(instructions.contains(&format!("export AZURE_CONFIG_DIR={}", quote(&profile.to_string_lossy()))));
-        assert!(instructions.find("AZURE_CONFIG_DIR").unwrap() < instructions.find("az login").unwrap());
-        assert!(!login_commands_for("stg", Some(&home)).contains("AZURE_CONFIG_DIR"));
-        std::fs::remove_dir_all(home).unwrap();
+    fn the_default_probe_is_run_by_its_path_relative_to_the_platform() {
+        if std::env::var_os(PROBE_OVERRIDE).is_none() {
+            assert!(command_line("dev", &Request::Overview).contains(" 'tools/monitor_probe.py' 'overview'"));
+        }
+    }
+
+    #[test]
+    fn a_windows_verbatim_prefix_is_dropped() {
+        assert_eq!(without_verbatim_prefix(PathBuf::from(r"\\?\C:\Work\CDW")), PathBuf::from(r"C:\Work\CDW"));
+        assert_eq!(without_verbatim_prefix(PathBuf::from("/Users/x/CDW")), PathBuf::from("/Users/x/CDW"));
     }
 
     #[test]

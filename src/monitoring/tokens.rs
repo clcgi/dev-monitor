@@ -60,4 +60,13 @@ pub const KEYFRAMES: &str = "\
 .cdwm-logo svg{width:132px;height:auto;display:block}\
 .cdwm-root .cdwm-trace:hover{background:#B85C28 !important;border-color:#B85C28 !important;filter:none}\
 .cdwm-row:not(.cdwm-selected):hover{background:#F7F8F9 !important}\
+.cdwm-rail{width:252px}\
+.cdwm-content{padding:26px 28px 40px}\
+.cdwm-header{padding:14px 28px}\
+.cdwm-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}\
+.cdwm-trace-layout{display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:22px;align-items:start}\
+.cdwm-trace-side{display:grid;grid-template-columns:minmax(0,1fr);gap:26px;align-content:start}\
+@media (max-width:1560px){.cdwm-trace-layout{grid-template-columns:minmax(0,1fr) 300px}}\
+@media (max-width:1300px){.cdwm-trace-layout{grid-template-columns:minmax(0,1fr)}.cdwm-trace-side{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}}\
+@media (max-width:1180px){.cdwm-rail{width:212px}.cdwm-content{padding:18px 18px 32px}.cdwm-header{padding:12px 18px}.cdwm-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}\
 @media (prefers-reduced-motion: reduce){.cdwm-root *{animation:none !important}}";
