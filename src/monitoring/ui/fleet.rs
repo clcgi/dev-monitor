@@ -94,7 +94,7 @@ pub fn QueueScreen(kpis: Vec<Kpi>, rows: Vec<QueueRow>, current: String, refresh
             }
             if refreshing { SweepBar { color: AMBER.to_string(), track: RULE.to_string() } }
             div { class: "cdwm-kpis", style: "display:grid;gap:12px",
-                for k in kpis { KpiCard { key: "{k.label}", kpi: k } }
+                for k in kpis { KpiCard { key: "{k.label}", kpi: k.clone() } }
             }
             Panel { icon: "tray", title: "The parked queue".to_string(), subtitle: if sort().is_none() { "oldest first".to_string() } else { "sorted by column".to_string() }, right: format!("{} rows", rows.len()),
                 div { style: "overflow-x:auto",

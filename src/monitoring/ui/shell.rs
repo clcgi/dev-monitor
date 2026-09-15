@@ -5,7 +5,11 @@ use crate::monitoring::trace_view::Status;
 use crate::services::state::Environment;
 use dioxus::prelude::*;
 
-const LOGO: &str = include_str!("../../../assets/sbm-logo.svg");
+/// Present only when the checkout has the logo (see build.rs); the brand falls back to text otherwise.
+#[cfg(has_logo)]
+const LOGO: Option<&str> = Some(include_str!("../../../assets/sbm-logo.svg"));
+#[cfg(not(has_logo))]
+const LOGO: Option<&str> = None;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct NavItem {
@@ -51,7 +55,11 @@ pub fn Aside(
     rsx! {
         aside { class: "cdwm-rail", style: "flex-shrink:0;background:{CARD};border-right:1px solid {BORDER};display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:24px 0 22px",
             div { style: "padding:0 22px 22px",
-                div { class: "cdwm-logo", title: "SBM Offshore", dangerous_inner_html: LOGO }
+                if let Some(svg) = LOGO {
+                    div { class: "cdwm-logo", title: "SBM Offshore", dangerous_inner_html: svg }
+                } else {
+                    div { style: "{sans(700, 18.0)}letter-spacing:.02em;color:{ORANGE}", "SBM Offshore" }
+                }
                 div { style: "{sans(600, 13.0)}color:{TEXT_SOFT};margin-top:15px", "Central Document Warehouse" }
                 div { style: "{sans(500, 12.0)}color:{DIM};margin-top:2px", {format!("Document trace · {env_name} · read only · v{}", env!("CARGO_PKG_VERSION"))} }
             }

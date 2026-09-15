@@ -103,7 +103,7 @@ pub fn TracePrompt(overview: Option<Overview>, env_name: String, on_trace: Event
             if rows.is_empty() { EmptyRow { text: empty.to_string() } }
             for (i, (id, label, note)) in rows.into_iter().enumerate() {
                 div {
-                    key: "{i}-{id}",
+                    key: "{i}-{label}",
                     class: "cdwm-row",
                     style: "display:flex;align-items:center;gap:11px;padding:9px 18px;border-bottom:1px solid {ROW_RULE};cursor:pointer",
                     onclick: move |_| on_trace.call(id.clone()),
