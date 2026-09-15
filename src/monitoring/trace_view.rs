@@ -292,7 +292,6 @@ pub struct Header {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Candidate {
-    pub file_guid: String,
     pub key: String,
     pub document_id: String,
     /// Unique per arrival: a document that arrived twice shares its documentId across rows.
@@ -527,7 +526,6 @@ pub fn build(t: &Trace, now: DateTime<Utc>) -> Option<TraceView> {
             .candidates
             .iter()
             .map(|c| Candidate {
-                file_guid: c.file_guid.clone(),
                 key: c.display_key().to_string(),
                 document_id: c.document_id.clone(),
                 file_guid: c.file_guid.clone(),
