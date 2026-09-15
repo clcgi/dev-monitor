@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Environment {
-    Sandbox,
     Dev,
     Stg,
 }
@@ -16,7 +15,6 @@ pub enum Environment {
 impl Environment {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Environment::Sandbox => "sandbox",
             Environment::Dev => "dev",
             Environment::Stg => "stg",
         }
@@ -26,7 +24,6 @@ impl Environment {
 impl std::fmt::Display for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", match self {
-            Environment::Sandbox => "Sandbox",
             Environment::Dev => "Development",
             Environment::Stg => "Staging",
         })

@@ -7,7 +7,7 @@ This application provides a controlled UI for automatically discovering, trigger
 ## Features
 
 - **Automated Script Discovery**: Dynamically scans `../CentralDocumentWarehouse/tools/` for `.py` and `.sh` scripts.
-- **Environment Targeting**: Scripts are explicitly run against `sandbox`, `dev`, or `stg`. The application seamlessly passes this to the scripts by exporting `CDW_ENV` and sourcing `deploy/00-variables.sh`.
+- **Environment Targeting**: Scripts are explicitly run against Development (`dev`) or Staging (`stg`). The application seamlessly passes this to the scripts by exporting `CDW_ENV` and sourcing `deploy/00-variables.sh`.
 - **Live Visual Monitoring**: Streams `stdout` and parses `[CDW_STEP: ...]` and `[CDW_RESULT: ...]` markers to drive an animated 11-step pipeline stepper and results panel.
 - **Background Execution**: Prevents UI blocking by executing scripts asynchronously.
 - **Authentication Reminders**: Prompts users to authenticate with Azure (`az login`) every 12 hours.
