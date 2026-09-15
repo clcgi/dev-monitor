@@ -27,6 +27,39 @@ pub enum Screen {
     Home,
 }
 
+/// A place the user can go back to: a screen, and the trace it showed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Location {
+    pub screen: Screen,
+    pub traced: String,
+}
+
+const HISTORY_LIMIT: usize = 30;
+
+/// Records `here` before moving to `to`, unless the move goes nowhere.
+fn push_location(stack: &mut Vec<Location>, here: Location, to: &Location) {
+    if here == *to {
+        return;
+    }
+    stack.push(here);
+    if stack.len() > HISTORY_LIMIT {
+        stack.remove(0);
+    }
+}
+
+fn location_label(l: &Location, env_name: &str) -> String {
+    match l.screen {
+        Screen::Trace if l.traced.is_empty() => "Document trace".into(),
+        Screen::Trace => l.traced.clone(),
+        Screen::Queue => "Parked queue".into(),
+        Screen::Stuck => "Stuck extractions".into(),
+        Screen::Dead => "Dead-letter watch".into(),
+        Screen::Refs => "Reference freshness".into(),
+        Screen::Timing => "Step timing".into(),
+        Screen::Home => format!("{env_name} today"),
+    }
+}
+
 /// One probe request's lifecycle.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Fetch<T> {
@@ -110,6 +143,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
     let mut focused = use_signal(String::new);
     // Documents traced this session, newest first, for the rail.
     let mut recent = use_signal(Vec::<shell::RecentDoc>::new);
+    let mut history = use_signal(Vec::<Location>::new);
     // Relative times ("41 min ago") must move without a refetch.
     let mut clock = use_signal(Utc::now);
 
@@ -160,6 +194,8 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         if q.is_empty() {
             return;
         }
+        let here = Location { screen: *screen.peek(), traced: traced.peek().clone() };
+        push_location(&mut history.write(), here, &Location { screen: Screen::Trace, traced: q.clone() });
         query.set(q.clone());
         traced.set(q.clone());
         screen.set(Screen::Trace);
@@ -170,9 +206,42 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
     });
 
     let go = use_callback(move |s: Screen| {
+        let here = Location { screen: *screen.peek(), traced: traced.peek().clone() };
+        // "Document trace" while a trace is open returns to the start page; Back leads to the trace again.
+        let restart = s == Screen::Trace && here.screen == Screen::Trace;
+        let to = Location { screen: s, traced: if restart { String::new() } else { here.traced.clone() } };
+        push_location(&mut history.write(), here, &to);
+        if restart {
+            traced.set(String::new());
+            query.set(String::new());
+        }
         screen.set(s);
         let e = env();
         match s {
+            Screen::Dead if dead.peek().result.is_none() && !dead.peek().pending => fetch(dead, e, Request::DeadLetters),
+            Screen::Timing if timing.peek().result.is_none() && !timing.peek().pending => fetch(timing, e, Request::Timing),
+            _ => {}
+        }
+    });
+
+    let back = use_callback(move |_: ()| {
+        let Some(to) = history.write().pop() else { return };
+        let e = *env.peek();
+        if to.screen == Screen::Trace && to.traced != *traced.peek() {
+            query.set(to.traced.clone());
+            traced.set(to.traced.clone());
+            open_step.set(None);
+            open_group.set(None);
+            focused.set(String::new());
+            if !to.traced.is_empty() {
+                fetch(trace, e, Request::Trace(to.traced.clone()));
+            }
+        }
+        if to.screen == Screen::Trace {
+            query.set(to.traced.clone());
+        }
+        screen.set(to.screen);
+        match to.screen {
             Screen::Dead if dead.peek().result.is_none() && !dead.peek().pending => fetch(dead, e, Request::DeadLetters),
             Screen::Timing if timing.peek().result.is_none() && !timing.peek().pending => fetch(timing, e, Request::Timing),
             _ => {}
@@ -216,6 +285,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         _ => None,
     };
     let nav = vec![
+        NavItem { screen: Screen::Home, icon: "database", label: format!("{env_name} today"), badge: None, hot: false },
         NavItem { screen: Screen::Trace, icon: "magnifying-glass", label: "Document trace".into(), badge: None, hot: false },
         NavItem {
             screen: Screen::Queue,
@@ -246,7 +316,6 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
             hot: stale_ref,
         },
         NavItem { screen: Screen::Timing, icon: "timer", label: "Step timing".into(), badge: None, hot: false },
-        NavItem { screen: Screen::Home, icon: "database", label: format!("{env_name} today"), badge: None, hot: false },
     ];
 
     let any_pending = ov.pending || trace.read().pending || dead.read().pending || timing.read().pending;
@@ -296,6 +365,9 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
     let current_doc = trace_data.as_ref().and_then(|t| t.root.as_ref()).map(|r| r.document_id.clone()).unwrap_or_default();
     let oldest_parked = ov_data.as_ref().and_then(|o| fleet_view::queue(o, now).1.first().map(|r| r.document_id.clone()));
 
+    // Back belongs to a drilled-into trace; the top-level pages are reached from the rail.
+    let back_label = if active == Screen::Trace { history.read().last().map(|l| location_label(l, &env_name)) } else { None };
+    let rail_current = current_doc.clone();
     let on_trace = move |q: String| run_trace.call(q);
     let on_go = move |s: Screen| go.call(s);
 
@@ -332,7 +404,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
                             on_trace,
                         }
                     },
-                    None => rsx! { home::NoMatch { trace: data, env_name: env_name.clone(), oldest_parked: oldest_parked.clone(), on_trace, on_go } },
+                    None => rsx! { home::NoMatch { trace: data, env_name: env_name.clone(), oldest_parked: oldest_parked.clone(), on_trace } },
                 },
             }
         }
@@ -349,24 +421,24 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         },
         Screen::Refs => match gate(&ov, "reference pointers", &env_name, refresh) {
             Err(card) => card,
-            Ok((o, pending)) => rsx! { fleet::RefsScreen { rows: fleet_view::references(&o, now), refreshing: pending, on_go } },
+            Ok((o, pending)) => rsx! { fleet::RefsScreen { rows: fleet_view::references(&o, now), refreshing: pending } },
         },
         Screen::Dead => match gate(&dead.read().clone(), "dead-letter queues", &env_name, refresh) {
             Err(card) => card,
             Ok((d, pending)) => rsx! {
-                fleet::DeadScreen { rows: fleet_view::dead_letters(&d, now), data: d.clone(), refreshing: pending, on_trace, on_go }
+                fleet::DeadScreen { rows: fleet_view::dead_letters(&d, now), data: d.clone(), refreshing: pending, on_trace }
             },
         },
         Screen::Timing => match gate(&timing.read().clone(), "step timing", &env_name, refresh) {
             Err(card) => card,
             Ok((t, pending)) => rsx! {
-                fleet::TimingScreen { rows: fleet_view::timing(&t, now), documents: t.docs.len(), truncated: t.truncated, refreshing: pending, on_go }
+                fleet::TimingScreen { rows: fleet_view::timing(&t, now), documents: t.docs.len(), truncated: t.truncated, refreshing: pending }
             },
         },
         Screen::Home => match gate(&ov, "the environment", &env_name, refresh) {
             Err(card) => card,
             Ok((o, pending)) => rsx! {
-                home::HomeScreen { home: fleet_view::home(&o, now), overview: o.clone(), refreshing: pending, on_trace, on_go }
+                home::HomeScreen { home: fleet_view::home(&o, now), overview: o.clone(), refreshing: pending, on_trace }
             },
         },
     };
@@ -375,7 +447,9 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         style { {KEYFRAMES} }
         div {
             class: "cdwm-root",
-            style: "display:flex;height:100vh;min-height:0;background:{BG};color:{TEXT};font-family:{SANS};-webkit-font-smoothing:antialiased",
+            tabindex: "-1",
+            onkeydown: move |e| if active == Screen::Trace && e.key() == Key::ArrowLeft && e.modifiers().alt() { back.call(()) },
+            style: "display:flex;height:100vh;min-height:0;outline:none;background:{BG};color:{TEXT};font-family:{SANS};-webkit-font-smoothing:antialiased",
             shell::Aside {
                 nav,
                 active: if active == Screen::Trace || no_match { Screen::Trace } else { active },
@@ -385,9 +459,13 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
                 audit,
                 docs: recent(),
                 current: current_doc.clone(),
-                on_trace,
+                on_trace: move |id: String| if id != rail_current { run_trace.call(id) },
                 on_nav: on_go,
-                on_env: move |e: Environment| env.set(e),
+                // History belongs to one environment: its traces mean nothing in another.
+                on_env: move |e: Environment| if e != *env.peek() {
+                    history.write().clear();
+                    env.set(e);
+                },
                 on_developer: move |_| on_open_developer.call(()),
             }
             div { style: "flex:1;min-width:0;display:flex;flex-direction:column;background:{BG}",
@@ -396,11 +474,97 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
                     title,
                     query: query(),
                     busy: any_pending,
+                    back: back_label,
+                    on_back: move |_| back.call(()),
                     on_submit: move |q: String| run_trace.call(q),
                     on_refresh: move |_| refresh.call(()),
                 }
-                div { style: "flex:1;overflow:auto;padding:26px 28px 40px", {body} }
+                div { class: "cdwm-content", style: "flex:1;overflow:auto;min-width:0", {body} }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(screen: Screen, traced: &str) -> Location {
+        Location { screen, traced: traced.into() }
+    }
+
+    #[test]
+    fn going_somewhere_records_where_you_were_and_staying_put_does_not() {
+        let mut stack = vec![];
+        push_location(&mut stack, at(Screen::Queue, ""), &at(Screen::Trace, "D1"));
+        push_location(&mut stack, at(Screen::Trace, "D1"), &at(Screen::Trace, "D1"));
+        push_location(&mut stack, at(Screen::Trace, "D1"), &at(Screen::Trace, "M1"));
+        assert_eq!(stack, vec![at(Screen::Queue, ""), at(Screen::Trace, "D1")]);
+        for i in 0..40 {
+            push_location(&mut stack, at(Screen::Trace, &i.to_string()), &at(Screen::Home, ""));
+        }
+        assert_eq!(stack.len(), HISTORY_LIMIT);
+    }
+
+    #[test]
+    fn back_labels_name_the_page_or_the_traced_document() {
+        assert_eq!(location_label(&at(Screen::Queue, ""), "DEV"), "Parked queue");
+        assert_eq!(location_label(&at(Screen::Trace, "001-x"), "DEV"), "001-x");
+        assert_eq!(location_label(&at(Screen::Home, ""), "DEV"), "DEV today");
+    }
+}
+
+#[cfg(test)]
+mod duplicate_arrivals {
+    use super::*;
+    use crate::monitoring::model::{Doc, StuckRoot};
+    use std::cell::Cell;
+
+    thread_local! {
+        static ARRIVALS: Cell<usize> = const { Cell::new(5) };
+    }
+
+    fn overview() -> Overview {
+        let arrivals = ARRIVALS.with(Cell::get);
+        let arrival = |guid: String| Doc {
+            document_id: "D1".into(),
+            file_guid: guid,
+            business_key: "001-x".into(),
+            state: "PendingMetadata".into(),
+            pending_since: Some("2026-08-14T08:00:00Z".into()),
+            uploaded_at: Some("2026-08-14T08:00:00Z".into()),
+            ..Default::default()
+        };
+        Overview {
+            parked: (0..arrivals).map(|i| arrival(format!("p{i}"))).collect(),
+            curated: (0..arrivals).map(|i| arrival(format!("c{i}"))).collect(),
+            stuck: (0..arrivals)
+                .map(|i| StuckRoot { root: Doc { document_id: "R1".into(), revision_id: "02".into(), file_guid: format!("r{i}"), ..Default::default() }, ..Default::default() })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[component]
+    fn Pages() -> Element {
+        let o = overview();
+        let now = Utc::now();
+        let (kpis, rows) = fleet_view::queue(&o, now);
+        rsx! {
+            home::TracePrompt { overview: Some(o.clone()), env_name: "DEV".to_string(), on_trace: move |_| {}, on_go: move |_| {} }
+            fleet::QueueScreen { kpis, rows, current: String::new(), refreshing: false, on_trace: move |_| {} }
+            fleet::StuckScreen { rows: fleet_view::stuck(&o, now), refreshing: false, on_trace: move |_| {} }
+        }
+    }
+
+    /// Dioxus only checks keyed siblings when it diffs a list it already rendered, so render twice.
+    #[test]
+    fn documents_that_arrived_more_than_once_re_render_without_duplicate_keys() {
+        ARRIVALS.with(|a| a.set(5));
+        let mut dom = VirtualDom::new(Pages);
+        dom.rebuild_in_place();
+        ARRIVALS.with(|a| a.set(6));
+        dom.mark_dirty(ScopeId::APP);
+        dom.render_immediate_to_vec();
     }
 }

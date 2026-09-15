@@ -1,13 +1,13 @@
 use super::kit::*;
 use super::Screen;
-use crate::monitoring::fleet_view::Home;
+use crate::monitoring::fleet_view::{paginate, Home};
 use crate::monitoring::format as fmt;
 use crate::monitoring::model::{Overview, Trace};
 use crate::monitoring::tokens::*;
 use dioxus::prelude::*;
 
 #[component]
-pub fn HomeScreen(home: Home, overview: Overview, refreshing: bool, on_trace: EventHandler<String>, on_go: EventHandler<Screen>) -> Element {
+pub fn HomeScreen(home: Home, overview: Overview, refreshing: bool, on_trace: EventHandler<String>) -> Element {
     let headline = format!("{}letter-spacing:.01em;color:{TEXT_STRONG}", sans(600, 18.0));
     let body = format!("{}line-height:1.75;color:{TEXT_BODY};margin-top:9px", sans(400, 13.0));
     let label = format!("{}letter-spacing:.16em;color:{DIM}", mono(400, 9.0));
@@ -42,8 +42,6 @@ pub fn HomeScreen(home: Home, overview: Overview, refreshing: bool, on_trace: Ev
                 if let Some(id) = first_parked {
                     ActionButton { label: "Trace the oldest parked".to_string(), icon: "hourglass-high", primary: true, onclick: move |_| on_trace.call(id.clone()) }
                 }
-                ActionButton { label: "Parked queue".to_string(), icon: "tray", primary: false, onclick: move |_| on_go.call(Screen::Queue) }
-                ActionButton { label: "Stuck extractions".to_string(), icon: "pause-circle", primary: false, onclick: move |_| on_go.call(Screen::Stuck) }
             }
             if home.empty {
                 div { style: "{footnote}", "Blank is the honest answer. The viewer will not synthesize a story from an empty environment." }
@@ -78,12 +76,35 @@ pub fn TracePrompt(overview: Option<Overview>, env_name: String, on_trace: Event
                 .collect()
         })
         .unwrap_or_default();
+    let curated: Vec<(String, String, String, String)> = overview
+        .as_ref()
+        .map(|o| o.curated.iter().take(6).map(|d| (d.file_guid.clone(), d.document_id.clone(), d.display_key().to_string(), fmt::or_dash(Some(d.source_system.clone())))).collect())
+        .unwrap_or_default();
+    let curated_total = overview.as_ref().map(|o| format!("{} in curated", o.curated_rows)).unwrap_or_default();
+    // The manifest lists deliveries latest last, and each leaf is the fileGuid, which traces that exact arrival.
+    let pace: Vec<(String, String, String, String)> = overview
+        .as_ref()
+        .map(|o| {
+            o.pace_delivered
+                .iter()
+                .rev()
+                .take(6)
+                .filter_map(|path| {
+                    let parts: Vec<&str> = path.split('/').collect();
+                    let guid = parts.last()?.split('.').next()?.to_string();
+                    Some((guid.clone(), guid, parts.get(1).copied().unwrap_or_default().to_string(), parts.first().copied().unwrap_or_default().to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let pace_total = overview.as_ref().map(|o| format!("{} delivered", o.pace_delivered.len())).unwrap_or_default();
     let pick = |rows: Vec<(String, String, String, String)>, empty: &'static str| {
         rsx! {
             if rows.is_empty() { EmptyRow { text: empty.to_string() } }
-            for (file_guid, id, label, note) in rows {
+            // The key must not read `file_guid`: the click closure below moves it.
+            for (i, (file_guid, id, label, note)) in rows.into_iter().enumerate() {
                 div {
-                    key: "{id}-{file_guid}",
+                    key: "{i}-{id}",
                     class: "cdwm-row",
                     style: "display:flex;align-items:center;gap:11px;padding:9px 18px;border-bottom:1px solid {ROW_RULE};cursor:pointer",
                     onclick: move |_| on_trace.call(file_guid.clone()),
@@ -108,6 +129,12 @@ pub fn TracePrompt(overview: Option<Overview>, env_name: String, on_trace: Event
                     Panel { icon: "pause-circle", icon_color: CORAL.to_string(), title: "Extracting".to_string(), subtitle: "longest silent first".to_string(),
                         {pick(extracting, "No archive is mid-walk.")}
                     }
+                    Panel { icon: "stack", icon_color: CYAN.to_string(), title: "Recently curated".to_string(), subtitle: curated_total,
+                        {pick(curated, "Nothing has been placed in curated.")}
+                    }
+                    Panel { icon: "export", icon_color: BLUE.to_string(), title: "Delivered to PACE".to_string(), subtitle: pace_total,
+                        {pick(pace, "Nothing has been delivered to PACE.")}
+                    }
                 }
             }
             div { style: "display:flex;gap:10px;justify-content:center",
@@ -118,7 +145,9 @@ pub fn TracePrompt(overview: Option<Overview>, env_name: String, on_trace: Event
 }
 
 #[component]
-pub fn NoMatch(trace: Trace, env_name: String, oldest_parked: Option<String>, on_trace: EventHandler<String>, on_go: EventHandler<Screen>) -> Element {
+pub fn NoMatch(trace: Trace, env_name: String, oldest_parked: Option<String>, on_trace: EventHandler<String>) -> Element {
+    let mut audit_page = use_signal(|| 0usize);
+    let audit_shown = paginate(&trace.audit, audit_page());
     let title = format!("{}color:{TEXT_STRONG};margin-top:10px;overflow-wrap:anywhere", sans(600, 16.0));
     let body = format!("{}line-height:1.7;color:{TEXT_BODY};margin-top:6px", sans(400, 12.5));
     let label = format!("padding:10px 18px;border-bottom:1px solid {RULE};{}letter-spacing:.18em;color:{DIM}", mono(400, 9.0));
@@ -136,7 +165,6 @@ pub fn NoMatch(trace: Trace, env_name: String, oldest_parked: Option<String>, on
         }
     };
     let scale = format!("{env_name} holds {} audit rows and {} catalog rows today", trace.audit_rows, trace.catalog_rows);
-    let queue_is_primary = oldest_parked.is_none();
     rsx! {
         div { style: "max-width:660px;margin:48px auto 0;display:flex;flex-direction:column;gap:16px",
             div { style: "text-align:center",
@@ -167,19 +195,19 @@ pub fn NoMatch(trace: Trace, env_name: String, oldest_parked: Option<String>, on
             }
             if !trace.audit.is_empty() {
                 Panel { icon: "clock-counter-clockwise", title: "Audit entries with no catalog row".to_string(),
-                    for a in trace.audit.clone() {
+                    for a in audit_shown.rows.clone() {
                         div { key: "{a.id}", style: "display:flex;gap:11px;padding:8px 18px;border-bottom:1px solid {ROW_RULE}",
                             span { style: "{audit_at}", {fmt::parse(&a.occurred_at).map(fmt::day_clock).unwrap_or_default()} }
                             span { style: "{audit_text}", "{a.event_type} documentId={a.document_id} {a.detail}" }
                         }
                     }
+                    Pager { page: audit_shown.page, pages: audit_shown.pages, total: audit_shown.total, on_page: move |p| audit_page.set(p) }
                 }
             }
             div { style: "display:flex;gap:10px;justify-content:center;flex-wrap:wrap",
                 if let Some(id) = oldest_parked {
                     ActionButton { label: "Trace the oldest parked".to_string(), icon: "hourglass-high", primary: true, onclick: move |_| on_trace.call(id.clone()) }
                 }
-                ActionButton { label: "Browse the queue".to_string(), icon: "tray", primary: queue_is_primary, onclick: move |_| on_go.call(Screen::Queue) }
             }
         }
     }

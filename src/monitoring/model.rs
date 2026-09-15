@@ -56,6 +56,7 @@ pub struct Doc {
     pub state: String,
     pub file_name: String,
     pub file_guid: String,
+    pub file_indicator: String,
     pub mime_type: String,
     pub sniffed_mime: String,
     pub size_bytes: Option<u64>,
@@ -216,6 +217,12 @@ pub struct Overview {
     pub catalog_rows: u64,
     pub audit_rows: u64,
     pub parked: Vec<Doc>,
+    /// The most recently written documents with a curated address.
+    pub curated: Vec<Doc>,
+    pub curated_rows: u64,
+    pub dispatched_not_curated: u64,
+    /// PACE's delivery manifest: every path delivered so far, latest last.
+    pub pace_delivered: Vec<String>,
     pub stuck: Vec<StuckRoot>,
     pub sources: Vec<SourceCfg>,
     pub references: Vec<RefPointer>,

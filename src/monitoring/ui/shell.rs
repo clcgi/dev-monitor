@@ -5,7 +5,11 @@ use crate::monitoring::trace_view::Status;
 use crate::services::state::Environment;
 use dioxus::prelude::*;
 
-const LOGO: &str = include_str!("../../../assets/sbm-logo.svg");
+/// Present only when the checkout has the logo (see build.rs); the brand falls back to text otherwise.
+#[cfg(has_logo)]
+const LOGO: Option<&str> = Some(include_str!("../../../assets/sbm-logo.svg"));
+#[cfg(not(has_logo))]
+const LOGO: Option<&str> = None;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct NavItem {
@@ -49,9 +53,13 @@ pub fn Aside(
         sans(600, 12.5)
     );
     rsx! {
-        aside { style: "width:252px;flex-shrink:0;background:{CARD};border-right:1px solid {BORDER};display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:24px 0 22px",
+        aside { class: "cdwm-rail", style: "flex-shrink:0;background:{CARD};border-right:1px solid {BORDER};display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:24px 0 22px",
             div { style: "padding:0 22px 22px",
-                div { class: "cdwm-logo", title: "SBM Offshore", dangerous_inner_html: LOGO }
+                if let Some(svg) = LOGO {
+                    div { class: "cdwm-logo", title: "SBM Offshore", dangerous_inner_html: svg }
+                } else {
+                    div { style: "{sans(700, 18.0)}letter-spacing:.02em;color:{ORANGE}", "SBM Offshore" }
+                }
                 div { style: "{sans(600, 13.0)}color:{TEXT_SOFT};margin-top:15px", "Central Document Warehouse" }
                 div { style: "{sans(500, 12.0)}color:{DIM};margin-top:2px", {format!("Document trace · {env_name} · read only · v{}", env!("CARGO_PKG_VERSION"))} }
             }
@@ -162,7 +170,16 @@ fn env_button(candidate: Environment, current: Environment, on_env: EventHandler
 }
 
 #[component]
-pub fn Header(breadcrumb: String, title: String, query: String, busy: bool, on_submit: EventHandler<String>, on_refresh: EventHandler<()>) -> Element {
+pub fn Header(
+    breadcrumb: String,
+    title: String,
+    query: String,
+    busy: bool,
+    back: Option<String>,
+    on_back: EventHandler<()>,
+    on_submit: EventHandler<String>,
+    on_refresh: EventHandler<()>,
+) -> Element {
     // The draft lives here, so typing re-renders the search box and not every screen.
     let mut draft = use_signal(|| query.clone());
     use_effect(use_reactive((&query,), move |(query,)| draft.set(query)));
@@ -174,15 +191,23 @@ pub fn Header(breadcrumb: String, title: String, query: String, busy: bool, on_s
         sans(700, 13.0)
     );
     let refresh_spin = if busy { "animation:cdwm-spin 1s linear infinite;" } else { "" };
+    let back_style = format!(
+        "display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border:1px solid {DASH};border-radius:9px;background:{CARD};cursor:pointer;flex-shrink:0"
+    );
     rsx! {
         header { style: "flex-shrink:0;border-bottom:1px solid {BORDER};background:{CARD}",
-            div { style: "display:flex;align-items:center;gap:14px;padding:14px 28px",
-                div { style: "min-width:0;overflow:hidden",
+            div { class: "cdwm-header", style: "display:flex;align-items:center;gap:12px 14px;flex-wrap:wrap",
+                if let Some(label) = back {
+                    button { r#type: "button", title: "Back to {label}", "aria-label": "Back to {label}", style: "{back_style}", onclick: move |_| on_back.call(()),
+                        Icon { name: "arrow-left", size: 17.0, color: TEXT_SOFT.to_string() }
+                    }
+                }
+                div { style: "min-width:0;overflow:hidden;flex:1 1 220px",
                     div { style: "{crumb}", "{breadcrumb}" }
                     h1 { style: "{h1}", "{title}" }
                 }
-                div { style: "flex:1" }
-                div { style: "display:flex;align-items:center;height:38px;border:1px solid {DASH};border-radius:9px;background:{CARD};min-width:200px;flex:0 1 440px",
+                div { style: "display:flex;align-items:center;gap:10px;flex:1 1 420px;min-width:0;max-width:620px",
+                div { style: "display:flex;align-items:center;height:38px;border:1px solid {DASH};border-radius:9px;background:{CARD};min-width:0;flex:1 1 200px",
                     span { style: "padding:0 10px 0 12px;display:inline-flex", Icon { name: "magnifying-glass", size: 17.0, color: DIM.to_string() } }
                     input {
                         style: "{input}",
@@ -203,6 +228,7 @@ pub fn Header(breadcrumb: String, title: String, query: String, busy: bool, on_s
                     style: "display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid {DASH};border-radius:9px;background:{CARD};cursor:pointer",
                     onclick: move |_| on_refresh.call(()),
                     span { style: "display:inline-flex;{refresh_spin}", Icon { name: "arrow-clockwise", size: 17.0, color: TEXT_SOFT.to_string() } }
+                }
                 }
             }
         }

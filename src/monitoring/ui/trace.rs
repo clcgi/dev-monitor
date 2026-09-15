@@ -1,4 +1,5 @@
 use super::kit::*;
+use crate::monitoring::fleet_view::paginate;
 use crate::monitoring::format as fmt;
 use crate::monitoring::tokens::*;
 use crate::monitoring::trace_view::*;
@@ -15,19 +16,14 @@ enum Tab {
 enum Viz {
     List,
     Graph,
-    Facility,
 }
 
-/// What the graph and facility views have selected.
+/// What the graph has selected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Pick {
     Step(StepId),
     Zone(&'static str),
-    Member(usize),
 }
-
-/// Orbit angles of the facility view, in degrees.
-const CAMERA: (f64, f64) = (-40.0, 56.0);
 
 fn fact_value(h: &Header, label: &str) -> String {
     h.facts.iter().find(|f| f.label == label).map(|f| f.value.clone()).unwrap_or_default()
@@ -64,6 +60,7 @@ fn zone_icon(zone: &str) -> &'static str {
         "raw" => "database",
         "quarantine" => "shield-warning",
         "rejected" => "prohibit",
+        "pace" => "export",
         _ => "stack",
     }
 }
@@ -91,12 +88,13 @@ pub fn TraceScreen(
     let mut tab = use_signal(|| Tab::Steps);
     let mut viz = use_signal(|| Viz::List);
     let mut pick = use_signal(|| Option::<Pick>::None);
+    let mut member_page = use_signal(|| 0usize);
+    let mut log_page = use_signal(|| 0usize);
     // A different document: indexes and zones picked on the last one mean nothing here.
     let document = fact_value(&view.header, "DOCUMENTID");
     use_effect(use_reactive((&document,), move |_| {
         pick.set(None);
-        tab.set(Tab::Steps);
-        viz.set(Viz::List);
+        member_page.set(0);
     }));
     let checked_clock = fmt::parse(&checked).map(fmt::clock).unwrap_or_default();
 
@@ -127,8 +125,8 @@ pub fn TraceScreen(
     let current_tab = format!("{} · rev {}", view.header.key, fmt::or_dash(Some(fact_value(&view.header, "REVISION"))));
 
     rsx! {
-        div { style: "display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start;max-width:1680px",
-            div { style: "flex:999 1 560px;min-width:0",
+        div { class: "cdwm-trace-layout",
+            div { style: "min-width:0",
                 div { style: "display:flex;align-items:center;gap:20px;flex-wrap:wrap",
                     div { style: "min-width:0",
                         div { style: "{title}", "{view.header.key}" }
@@ -154,7 +152,8 @@ pub fn TraceScreen(
                             button { r#type: "button", style: "{segmented(true)}", title: "The document traced for “{query}”", "{current_tab}" }
                             for c in view.candidates.clone() {
                                 {
-                                    let id = c.file_guid.clone();
+                                    // By fileGuid: re-tracing a repeated documentId would land on the same row again.
+                                    let id = if c.file_guid.is_empty() { c.document_id.clone() } else { c.file_guid.clone() };
                                     rsx! {
                                         button {
                                             key: "{c.document_id}-{c.file_guid}",
@@ -162,7 +161,7 @@ pub fn TraceScreen(
                                             title: "{c.state} · registered {c.registered}",
                                             style: "{segmented(false)}",
                                             onclick: move |_| on_trace.call(id.clone()),
-                                            "{c.key} · rev {c.revision}"
+                                            "{c.key} · rev {c.revision} · {c.registered}"
                                         }
                                     }
                                 }
@@ -183,9 +182,6 @@ pub fn TraceScreen(
                             }
                             button { r#type: "button", title: "Dependency network", style: "{segmented(viz_now == Viz::Graph)}", onclick: move |_| viz.set(Viz::Graph),
                                 Icon { name: "tree-structure", size: 16.0, color: TEXT_BODY.to_string() } "Graph"
-                            }
-                            button { r#type: "button", title: "Facility view — altitude is archive depth", style: "{segmented(viz_now == Viz::Facility)}", onclick: move |_| viz.set(Viz::Facility),
-                                Icon { name: "cube", size: 16.0, color: TEXT_BODY.to_string() } "3D"
                             }
                         }
                     }
@@ -208,16 +204,21 @@ pub fn TraceScreen(
                         })}
                         {picked_card(&view, selected, &checked_clock)}
                     },
-                    (Tab::Steps, Viz::Facility) => rsx! {
-                        Facility { view: view.clone(), selected, on_pick: move |p| pick.set(Some(p)) }
-                        {picked_card(&view, selected, &checked_clock)}
-                    },
-                    (Tab::Members, _) => members(&view, on_trace),
-                    (Tab::Logs, _) => logs(&view, open_group, on_group),
+                    (Tab::Members, _) => members(&view, on_trace, member_page(), EventHandler::new(move |p| member_page.set(p))),
+                    (Tab::Logs, _) => logs(
+                        &view,
+                        open_group,
+                        EventHandler::new(move |g| {
+                            log_page.set(0);
+                            on_group.call(g)
+                        }),
+                        log_page(),
+                        EventHandler::new(move |p| log_page.set(p)),
+                    ),
                 }
             }
 
-            aside { style: "flex:1 0 336px;max-width:100%;min-width:0;{card()};padding:24px 20px 30px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:26px;align-content:start",
+            aside { class: "cdwm-trace-side", style: "min-width:0;{card()};padding:24px 20px 30px",
                 {right_now(&view, &checked_clock)}
                 {where_bytes(&view)}
                 {declared(&view)}
@@ -475,279 +476,7 @@ fn graph(view: &TraceView, selected: Option<Pick>, on_pick: impl FnMut(Pick) + C
     }
 }
 
-/// A zone pad: (zone, x, y, z, w, h, thickness). World units; z is altitude.
-const PADS: [(&str, f64, f64, f64, f64, f64, f64); 5] = [
-    ("landing", -168.0, 0.0, 0.0, 100.0, 72.0, 12.0),
-    ("raw", 46.0, 0.0, 0.0, 106.0, 76.0, 14.0),
-    ("rejected", -156.0, 140.0, -30.0, 84.0, 60.0, 7.0),
-    ("quarantine", 44.0, 140.0, -30.0, 84.0, 60.0, 7.0),
-    ("curated", 226.0, 92.0, 22.0, 88.0, 62.0, 5.0),
-];
-const MEMBER_W: f64 = 76.0;
-const MEMBER_H: f64 = 54.0;
-const MEMBER_T: f64 = 6.0;
-/// The facility shows the first members only; the Members tab lists them all.
-const MAX_MEMBERS_3D: usize = 24;
-const STAGE_W: f64 = 760.0;
-const STAGE_H: f64 = 452.0;
-
-fn floor(depth: u32) -> f64 {
-    54.0 + 42.0 * depth as f64
-}
-
-/// Where the i-th member of its depth sits, beside raw.
-fn member_xy(nth: usize) -> (f64, f64) {
-    (46.0 - 40.0 + (nth % 4) as f64 * 86.0, -34.0 + (nth / 4) as f64 * 62.0)
-}
-
-/// World to screen at the given angles (rotateX then rotateZ, as the stage applies them).
-fn project(x: f64, y: f64, z: f64, rz: f64, rx: f64) -> (f64, f64) {
-    let (t, p) = (rz.to_radians(), rx.to_radians());
-    (x * t.cos() - y * t.sin(), (x * t.sin() + y * t.cos()) * p.cos() - z * p.sin())
-}
-
-/// Zoom and offset that fit every pad and its fixed-size label in the stage.
-fn fit(boxes: &[(f64, f64, f64, f64, f64, f64)], rz: f64, rx: f64) -> (f64, f64, f64) {
-    let (avail_w, avail_h) = (STAGE_W - 36.0, STAGE_H - 36.0);
-    let bbox = |zoom: Option<f64>| {
-        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        let mut add = |(px, py): (f64, f64)| {
-            x0 = x0.min(px);
-            x1 = x1.max(px);
-            y0 = y0.min(py);
-            y1 = y1.max(py);
-        };
-        for &(x, y, z, w, h, t) in boxes {
-            for (cx, cy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                add(project(x + cx * w / 2.0, y + cy * h / 2.0, z, rz, rx));
-                add(project(x + cx * w / 2.0, y + cy * h / 2.0, z - t, rz, rx));
-            }
-            if let Some(zoom) = zoom {
-                let (px, py) = project(x, y, z, rz, rx);
-                add((px - 118.0 / zoom, py - 6.0 / zoom));
-                add((px + 118.0 / zoom, py + 44.0 / zoom));
-            }
-        }
-        (x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0))
-    };
-    let clamp = |z: f64| z.clamp(0.3, 1.15);
-    let (_, _, w, h) = bbox(None);
-    let mut zoom = clamp((avail_w / w).min(avail_h / h));
-    for _ in 0..2 {
-        let (_, _, w, h) = bbox(Some(zoom));
-        zoom = clamp((avail_w / w).min(avail_h / h));
-    }
-    let (x0, y0, w, h) = bbox(Some(zoom));
-    (zoom, -zoom * (x0 + w / 2.0), -zoom * (y0 + h / 2.0))
-}
-
-#[component]
-fn Facility(view: TraceView, selected: Option<Pick>, on_pick: EventHandler<Pick>) -> Element {
-    let mut camera = use_signal(|| CAMERA);
-    // (pointer x, pointer y, rz, rx) at the start of a drag.
-    let mut drag = use_signal(|| Option::<(f64, f64, f64, f64)>::None);
-    let (rz, rx) = camera();
-
-    let members: Vec<(usize, TreeRow)> = view.tree.as_ref().map(|t| t.rows.iter().cloned().enumerate().take(MAX_MEMBERS_3D).collect()).unwrap_or_default();
-    let mut per_depth = std::collections::HashMap::<u32, usize>::new();
-    let member_pos: Vec<(usize, TreeRow, f64, f64, f64)> = members
-        .into_iter()
-        .map(|(i, r)| {
-            let nth = per_depth.entry(r.depth).or_default();
-            let (x, y) = member_xy(*nth);
-            *nth += 1;
-            let z = floor(r.depth);
-            (i, r, x, y, z)
-        })
-        .collect();
-
-    let mut boxes: Vec<(f64, f64, f64, f64, f64, f64)> = PADS.iter().map(|&(_, x, y, z, w, h, t)| (x, y, z, w, h, t)).collect();
-    boxes.extend(member_pos.iter().map(|(_, _, x, y, z)| (*x, *y, *z, MEMBER_W, MEMBER_H, MEMBER_T)));
-    let (zoom, dx, dy) = fit(&boxes, rz, rx);
-    let stage = format!("translate({dx:.1}px,{dy:.1}px) scale({zoom:.3}) rotateX({rx}deg) rotateZ({rz}deg)");
-    let billboard = format!("rotateZ({}deg) rotateX({}deg) scale({:.3})", -rz, -rx, 1.0 / zoom.max(0.2));
-    let label = format!("{}white-space:nowrap;text-shadow:0 1px 5px #fff,0 0 11px #fff", mono(600, 12.5));
-    let tag = format!("{}letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;text-shadow:0 1px 5px #fff,0 0 11px #fff", sans(600, 10.5));
-
-    // Only the landing → raw hop is ever travelled; the rest are the roads not taken.
-    let promoted = view.map.e2.tone;
-    let links: Vec<(&str, &str, &str, bool)> = vec![
-        ("landing", "raw", match promoted {
-            EdgeTone::Done => OK_BD,
-            EdgeTone::Inferred => BLUE,
-            EdgeTone::Waiting => ORANGE_MID,
-            EdgeTone::Stalled => BAD_BD,
-            EdgeTone::Na => "#C7CCD0",
-        }, promoted == EdgeTone::Done),
-        ("landing", "rejected", "#C7CCD0", false),
-        ("raw", "quarantine", "#C7CCD0", false),
-        ("raw", "curated", "#C7CCD0", false),
-    ];
-    let pad_of = |zone: &str| PADS.iter().find(|p| p.0 == zone).copied();
-    let cursor = if drag().is_some() { "grabbing" } else { "grab" };
-    let head = format!("{}color:{TEXT}", sans(700, 14.0));
-    let note = format!("{}color:{DIM}", sans(500, 12.5));
-
-    rsx! {
-        div { style: "margin-top:16px;{card()};overflow:hidden",
-            div { style: "display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid {ROW_RULE};flex-wrap:wrap",
-                span { style: "{head}", "Facility view" }
-                span { style: "{note}", "altitude is archive depth · terminal zones sit below grade" }
-                span { style: "flex:1" }
-                button {
-                    r#type: "button",
-                    style: "padding:6px 13px;border:1px solid {DASH};border-radius:6px;background:{CARD};color:{TEXT_BODY};cursor:pointer;{sans(600, 12.0)}white-space:nowrap",
-                    onclick: move |_| camera.set(CAMERA),
-                    "Reset view"
-                }
-            }
-            div {
-                style: "position:relative;height:{STAGE_H}px;background:radial-gradient(ellipse 58% 54% at 50% 44%,#FCFCFD,#EDEFF1);cursor:{cursor};overflow:hidden;user-select:none",
-                onmousedown: move |e| {
-                    let p = e.client_coordinates();
-                    let (rz, rx) = camera();
-                    drag.set(Some((p.x, p.y, rz, rx)));
-                },
-                onmousemove: move |e| {
-                    let Some((x, y, rz, rx)) = drag() else { return };
-                    let p = e.client_coordinates();
-                    camera.set((rz + (p.x - x) * 0.3, (rx - (p.y - y) * 0.2).clamp(28.0, 78.0)));
-                },
-                onmouseup: move |_| drag.set(None),
-                onmouseleave: move |_| drag.set(None),
-                div { style: "position:absolute;left:50%;top:50%;width:0;height:0;transform-style:preserve-3d;transform:{stage}",
-                    div { style: "position:absolute;left:-560px;top:-420px;width:1120px;height:840px;background-image:linear-gradient(rgba(22,85,154,.1) 1px,transparent 1px),linear-gradient(90deg,rgba(22,85,154,.1) 1px,transparent 1px);background-size:44px 44px;-webkit-mask-image:radial-gradient(ellipse 40% 40% at 50% 50%,#000 34%,transparent 76%)" }
-                    for (a, b, color, solid) in links {
-                        {
-                            let (Some(pa), Some(pb)) = (pad_of(a), pad_of(b)) else { return rsx! {} };
-                            let (ddx, ddy, ddz) = (pb.1 - pa.1, pb.2 - pa.2, pb.3 - pa.3);
-                            let len = (ddx * ddx + ddy * ddy).sqrt();
-                            let angle = ddy.atan2(ddx).to_degrees();
-                            let bg = if solid { color.to_string() } else { format!("repeating-linear-gradient(90deg,{color} 0 9px,transparent 9px 18px)") };
-                            let thick = if color == "#C7CCD0" { 2 } else { 3 };
-                            let opacity = if a == "landing" && b == "raw" { ".95" } else { ".6" };
-                            let link = format!("translate3d({}px,{}px,{}px) rotateZ({angle}deg)", pa.1, pa.2, pa.3 + ddz / 2.0);
-                            rsx! {
-                                div { key: "{a}-{b}", style: "position:absolute;left:0;top:0;width:{len}px;height:{thick}px;transform:{link};transform-origin:0 50%;background:{bg};opacity:{opacity}" }
-                            }
-                        }
-                    }
-                    for (i, r, x, y, z) in member_pos.clone() {
-                        {
-                            let below = if r.depth == 0 { 0.0 } else { floor(r.depth - 1) };
-                            let riser = format!("translate3d({x}px,{y}px,{below}px) rotateZ({}deg) rotateX(90deg)", -rz);
-                            let rise = z - below;
-                            let bg = if r.reached { "linear-gradient(to bottom,rgba(22,85,154,.1),rgba(22,85,154,.55))" } else { "linear-gradient(to bottom,rgba(192,0,0,.08),rgba(192,0,0,.4))" };
-                            rsx! {
-                                div { key: "riser-{i}", style: "position:absolute;left:0;top:0;width:2px;height:{rise}px;margin-left:-1px;transform:{riser};transform-origin:50% 0;background:{bg};opacity:.9" }
-                            }
-                        }
-                    }
-                    for (zone, x, y, z, w, h, t) in PADS {
-                        {
-                            let row = view.zones.iter().find(|r| r.zone == zone).cloned();
-                            let here = view.zone_at == Some(zone);
-                            let on = selected == Some(Pick::Zone(zone));
-                            let (face, edge, skirt_a, skirt_b, glow, title_fg, tag_fg, dashed) = match row.as_ref() {
-                                _ if here => (SELECTED_BG, ORANGE_DEEP, "#F5E6D8", "#EEDAC7", "0 8px 18px rgba(184,92,40,.2)", TEXT, ORANGE_DEEP, false),
-                                Some(r) if !r.built => ("transparent", "#C7CCD0", "transparent", "transparent", "none", DIM, DIM, true),
-                                Some(r) if r.present => (CARD, OK_BD, OK_BG, "#D8EBDF", "0 5px 12px rgba(23,112,60,.12)", TEXT, CYAN, false),
-                                _ => (CARD_SOFT, DASH, "#F0F2F3", "#E6E9EB", "none", TEXT_BODY, DIM, false),
-                            };
-                            let (face, edge, glow) = if on { ("#F5E6D8", ORANGE_DEEP, "0 10px 22px rgba(184,92,40,.28)") } else { (face, edge, glow) };
-                            let border_style = if dashed { "dashed" } else { "solid" };
-                            let tag_text = row.map(|r| r.tag).unwrap_or_default();
-                            rsx! {
-                                {pad(PadLook { key: zone.to_string(), x, y, z, w, h, t, face, edge, border_style, skirt_a, skirt_b, glow,
-                                    title: zone.to_string(), title_fg, tag: tag_text, tag_fg, billboard: billboard.clone(), label: label.clone(), tag_style: tag.clone() },
-                                    move |_| on_pick.call(Pick::Zone(zone)))}
-                            }
-                        }
-                    }
-                    for (i, r, x, y, z) in member_pos {
-                        {
-                            let on = selected == Some(Pick::Member(i));
-                            let (face, edge, skirt_a, skirt_b, glow) = match (r.reached, r.container) {
-                                (true, true) => (INFO_BG, BLUE, "#DDE7F8", "#CDDBF2", "0 4px 10px rgba(26,26,26,.09)"),
-                                (true, false) => (CARD, OK_BD, OK_BG, "#D8EBDF", "0 4px 10px rgba(26,26,26,.09)"),
-                                _ => ("transparent", BAD_BD, "transparent", "transparent", "none"),
-                            };
-                            let (face, edge, glow) = if on { ("#F5E6D8", ORANGE_DEEP, "0 10px 22px rgba(184,92,40,.28)") } else { (face, edge, glow) };
-                            let tag_fg = if !r.reached { CORAL } else if r.container { BLUE } else { CYAN };
-                            let tag_text = match (r.reached, r.container) {
-                                (true, true) => "opened",
-                                (false, true) => "not opened",
-                                (true, false) => "in raw",
-                                (false, false) => "not reached",
-                            };
-                            rsx! {
-                                {pad(PadLook { key: format!("member-{i}"), x, y, z, w: MEMBER_W, h: MEMBER_H, t: MEMBER_T, face, edge,
-                                    border_style: if r.reached { "solid" } else { "dashed" }, skirt_a, skirt_b, glow,
-                                    title: r.name.clone(), title_fg: if r.reached { TEXT } else { "#8A6A6A" }, tag: tag_text.to_string(), tag_fg,
-                                    billboard: billboard.clone(), label: label.clone(), tag_style: tag.clone() },
-                                    move |_| on_pick.call(Pick::Member(i)))}
-                            }
-                        }
-                    }
-                }
-                div { style: "position:absolute;left:16px;bottom:14px;display:flex;gap:16px;flex-wrap:wrap",
-                    for (bg, fg, text) in [(CARD, OK_BD, "written to raw"), (INFO_BG, BLUE, "nested archive"), ("transparent", BAD_BD, "expected, not reached")] {
-                        span { key: "{text}", style: "display:inline-flex;align-items:center;gap:7px;white-space:nowrap",
-                            span { style: "width:11px;height:11px;border-radius:2px;background:{bg};border:1.5px solid {fg};flex-shrink:0" }
-                            span { style: "{sans(600, 11.5)}color:{TEXT_BODY}", "{text}" }
-                        }
-                    }
-                }
-                div { style: "position:absolute;right:16px;bottom:14px;{sans(500, 11.5)}color:{DIM}", "drag to orbit" }
-            }
-        }
-    }
-}
-
-struct PadLook {
-    key: String,
-    x: f64,
-    y: f64,
-    z: f64,
-    w: f64,
-    h: f64,
-    t: f64,
-    face: &'static str,
-    edge: &'static str,
-    border_style: &'static str,
-    skirt_a: &'static str,
-    skirt_b: &'static str,
-    glow: &'static str,
-    title: String,
-    title_fg: &'static str,
-    tag: String,
-    tag_fg: &'static str,
-    billboard: String,
-    label: String,
-    tag_style: String,
-}
-
-fn pad(p: PadLook, onclick: impl FnMut(Event<MouseData>) + 'static) -> Element {
-    let (mx, my) = (-p.w / 2.0, -p.h / 2.0);
-    rsx! {
-        div {
-            key: "{p.key}",
-            style: "position:absolute;left:0;top:0;width:{p.w}px;height:{p.h}px;margin-left:{mx}px;margin-top:{my}px;transform-style:preserve-3d;transform:translate3d({p.x}px,{p.y}px,{p.z}px);cursor:pointer",
-            onclick,
-            div { style: "position:absolute;inset:0;border-radius:4px;background:{p.face};border:1.5px {p.border_style} {p.edge};box-shadow:{p.glow}" }
-            div { style: "position:absolute;left:0;top:100%;width:100%;height:{p.t}px;transform:rotateX(-90deg);transform-origin:50% 0;background:{p.skirt_a}" }
-            div { style: "position:absolute;left:100%;top:0;width:{p.t}px;height:100%;transform:rotateY(90deg);transform-origin:0 50%;background:{p.skirt_b}" }
-            div { style: "position:absolute;left:50%;top:50%;transform:{p.billboard};transform-origin:0 0",
-                div { style: "display:flex;flex-direction:column;align-items:center;gap:2px;width:180px;margin-left:-90px;pointer-events:none",
-                    span { style: "{p.label}color:{p.title_fg}", "{p.title}" }
-                    span { style: "{p.tag_style}color:{p.tag_fg}", "{p.tag}" }
-                }
-            }
-        }
-    }
-}
-
-/// The selection under the graph and facility views.
+/// The selection under the graph.
 fn picked_card(view: &TraceView, selected: Option<Pick>, checked: &str) -> Element {
     struct Card {
         label: String,
@@ -778,36 +507,6 @@ fn picked_card(view: &TraceView, selected: Option<Pick>, checked: &str) -> Eleme
                 at: checked.to_string(),
                 body: z.note.clone(),
                 meta: vec![fact("OBJECT", if z.present { "present" } else { "absent" }.into()), fact("DETAIL", z.path.clone())],
-            }
-        }
-        Some(Pick::Member(i)) => {
-            let Some(r) = view.tree.as_ref().and_then(|t| t.rows.get(i)) else { return rsx! {} };
-            let (tile_bg, tile_fg, edge) = match (r.reached, r.container) {
-                (true, true) => (INFO_BG, BLUE, BLUE),
-                (true, false) => (OK_BG, CYAN, OK_BD),
-                _ => (BAD_BG, CORAL, BAD_BD),
-            };
-            Card {
-                label: format!("{}{}", r.parent, r.name),
-                icon: if r.container { "file-zip" } else { "file-text" },
-                tile_bg,
-                tile_fg,
-                edge,
-                status: match (r.reached, r.container) {
-                    (true, true) => "opened".into(),
-                    (true, false) => "written to raw".into(),
-                    _ => r.tag.clone(),
-                },
-                pill: if r.reached { (OK_BG, CYAN) } else { (BAD_BG, CORAL) },
-                prov: Some(if r.reached { Prov::Observed } else { Prov::Inferred }),
-                at: fmt::DASH.into(),
-                body: r.note.clone(),
-                meta: vec![
-                    fact("PATH FROM ROOT", format!("{}{}", r.parent, r.name)),
-                    fact("DEPTH", r.depth.to_string()),
-                    fact("DOCUMENT ID", r.document_id.clone()),
-                    fact("SIZE", if r.reached { r.size.clone() } else { fmt::DASH.into() }),
-                ],
             }
         }
         Some(Pick::Step(id)) => {
@@ -852,7 +551,7 @@ fn picked_card(view: &TraceView, selected: Option<Pick>, checked: &str) -> Eleme
     }
 }
 
-fn members(view: &TraceView, on_trace: EventHandler<String>) -> Element {
+fn members(view: &TraceView, on_trace: EventHandler<String>, page: usize, on_page: EventHandler<usize>) -> Element {
     let Some(tree) = view.tree.clone() else {
         let why = view.steps.iter().find(|s| s.id == StepId::Extracted).map(|s| s.why.clone()).unwrap_or_default();
         return rsx! {
@@ -870,10 +569,11 @@ fn members(view: &TraceView, on_trace: EventHandler<String>) -> Element {
         Tone::Bad => (BAD_BG, CORAL, "warning-circle"),
         _ => (WARN_BG, AMBER, "warning"),
     };
+    let shown = paginate(&tree.rows, page);
     rsx! {
         div { style: "margin-top:16px;display:flex;flex-direction:column;gap:8px",
             div { style: "{sans(700, 12.5)}letter-spacing:.04em;color:{note_fg}", "{tree.banner}" }
-            for (i, r) in tree.rows.iter().cloned().enumerate() {
+            for (i, r) in shown.rows.clone().into_iter().enumerate() {
                 {
                     let (tile_bg, tile_fg, edge) = match (r.reached, r.container) {
                         (true, true) => (INFO_BG, BLUE, BLUE),
@@ -893,7 +593,7 @@ fn members(view: &TraceView, on_trace: EventHandler<String>) -> Element {
                     let id = r.document_id.clone();
                     let name_fg = if r.reached { TEXT } else { TEXT_BODY };
                     let kind = if r.container { " · nested archive" } else { "" };
-                    let indent = r.depth * 26;
+                    let indent = r.depth.min(4) * 22;
                     let size_style = format!("{}color:{};min-width:74px;text-align:right;flex-shrink:0", mono(600, 12.0), if r.reached { TEXT_SOFT } else { DIM });
                     rsx! {
                         div {
@@ -914,6 +614,7 @@ fn members(view: &TraceView, on_trace: EventHandler<String>) -> Element {
                     }
                 }
             }
+            Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| on_page.call(p) }
             div { style: "display:flex;gap:12px;padding:15px 18px;border-radius:12px;background:{note_bg};border-left:3px solid {note_fg};margin-top:4px",
                 Icon { name: note_icon, size: 20.0, color: note_fg.to_string() }
                 span { style: "{sans(500, 13.5)}line-height:1.7;color:{TEXT_SOFT}", "{tree.note} {tree.footer}" }
@@ -922,7 +623,7 @@ fn members(view: &TraceView, on_trace: EventHandler<String>) -> Element {
     }
 }
 
-fn logs(view: &TraceView, open_group: Option<GroupId>, on_group: EventHandler<GroupId>) -> Element {
+fn logs(view: &TraceView, open_group: Option<GroupId>, on_group: EventHandler<GroupId>, page: usize, on_page: EventHandler<usize>) -> Element {
     let (bg, fg) = if view.logs_available { (WARN_BG, AMBER) } else { (BAD_BG, CORAL) };
     rsx! {
         div { style: "margin-top:16px;display:flex;flex-direction:column;gap:10px",
@@ -946,7 +647,7 @@ fn logs(view: &TraceView, open_group: Option<GroupId>, on_group: EventHandler<Gr
                             if open {
                                 div { style: "padding:0 17px 14px 49px",
                                     div { style: "{mono(500, 11.5)}color:{DIM};padding-bottom:8px", "as of {g.as_of}" }
-                                    for (i, e) in g.entries.iter().cloned().enumerate() {
+                                    for (i, e) in paginate(&g.entries, page).rows.into_iter().enumerate() {
                                         {
                                             let text_fg = match e.kind {
                                                 LogKind::None => DIM,
@@ -962,6 +663,10 @@ fn logs(view: &TraceView, open_group: Option<GroupId>, on_group: EventHandler<Gr
                                                 }
                                             }
                                         }
+                                    }
+                                    {
+                                        let shown = paginate(&g.entries, page);
+                                        rsx! { Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| on_page.call(p) } }
                                     }
                                 }
                             }
@@ -1056,11 +761,11 @@ fn declared(view: &TraceView) -> Element {
         div {
             {side_head("Declared vs resolved", "disagreements are the interesting part")}
             div { style: "display:flex;flex-direction:column;margin-top:12px",
-                for m in view.meta.clone() {
+                for (i, m) in view.meta.clone().into_iter().enumerate() {
                     {
                         let resolved_fg = if m.flag { CORAL } else if m.pending { AMBER } else { TEXT };
                         rsx! {
-                            div { key: "{m.label}", style: "padding:10px 0;border-bottom:1px solid {ROW_RULE}",
+                            div { key: "{i}-{m.label}", style: "padding:10px 0;border-bottom:1px solid {ROW_RULE}",
                                 div { style: "{sans(600, 12.0)}color:{DIM}", "{m.label}" }
                                 div { style: "display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap",
                                     span { style: "{mono(500, 11.5)}color:{TEXT_SOFT};overflow-wrap:anywhere", "{m.declared}" }
@@ -1109,29 +814,100 @@ fn unknowns(view: &TraceView) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::monitoring::model::{Doc, Env, Trace};
+    use dioxus::dioxus_core::{ElementId, Mutation};
+    use std::cell::RefCell;
 
-    #[test]
-    fn the_facility_fits_its_pads_inside_the_stage() {
-        let boxes: Vec<_> = PADS.iter().map(|&(_, x, y, z, w, h, t)| (x, y, z, w, h, t)).collect();
-        let (zoom, dx, dy) = fit(&boxes, CAMERA.0, CAMERA.1);
-        assert!((0.3..=1.15).contains(&zoom), "{zoom}");
-        // Centred: the offset pulls the scene's middle to the stage's middle.
-        for &(x, y, z, _, _, _) in &boxes {
-            let (px, py) = project(x, y, z, CAMERA.0, CAMERA.1);
-            assert!((px * zoom + dx).abs() <= STAGE_W / 2.0, "x {px}");
-            assert!((py * zoom + dy).abs() <= STAGE_H / 2.0, "y {py}");
+    thread_local! {
+        static OPENED: RefCell<Vec<Option<StepId>>> = const { RefCell::new(Vec::new()) };
+        static VIEW: RefCell<Option<TraceView>> = const { RefCell::new(None) };
+    }
+
+    fn fixture_view() -> TraceView {
+        if let Some(view) = VIEW.with(|v| v.borrow().clone()) {
+            return view;
+        }
+        let root = Doc { document_id: "D1".into(), revision_id: "00".into(), state: "Dispatched".into(), ..Default::default() };
+        let trace = Trace { env: Env { name: "dev".into(), ..Default::default() }, checked_at: "2026-08-14T09:00:00Z".into(), root: Some(root), ..Default::default() };
+        crate::monitoring::trace_view::build(&trace, chrono::Utc::now()).expect("a root")
+    }
+
+    /// Wires on_step exactly as MonitoringApp does, and records every state it reaches.
+    #[component]
+    fn Harness() -> Element {
+        let mut open_step = use_signal(|| Option::<StepId>::None);
+        rsx! {
+            TraceScreen {
+                view: fixture_view(),
+                query: "D1".to_string(),
+                checked: "2026-08-14T09:00:00Z".to_string(),
+                refreshing: false,
+                open_step: open_step(),
+                open_group: None,
+                on_step: move |id: StepId| {
+                    let open = open_step() == Some(id);
+                    open_step.set(if open { None } else { Some(id) });
+                    OPENED.with(|o| o.borrow_mut().push(*open_step.peek()));
+                },
+                on_group: move |_| {},
+                on_trace: move |_| {},
+            }
         }
     }
 
+    fn click(dom: &VirtualDom, id: ElementId) {
+        let data = dioxus::html::PlatformEventData::new(Box::new(dioxus::html::SerializedMouseData::default()));
+        dom.runtime().handle_event("click", dioxus::dioxus_core::Event::new(std::rc::Rc::new(data) as std::rc::Rc<dyn std::any::Any>, true), id);
+    }
+
+    fn listeners(mutations: dioxus::dioxus_core::Mutations) -> Vec<ElementId> {
+        mutations
+            .edits
+            .into_iter()
+            .filter_map(|m| match m {
+                Mutation::NewEventListener { name, id } if name == "click" => Some(id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn last_opened() -> Option<Option<StepId>> {
+        OPENED.with(|o| o.borrow().last().cloned())
+    }
+
+    /// The same check over a recorded real answer: CDW_PROBE_SAMPLES/curated-root-trace.json. Opt-in.
     #[test]
-    fn projection_at_zero_angles_is_the_plan_view() {
-        assert_eq!(project(10.0, 20.0, 5.0, 0.0, 0.0), (10.0, 20.0));
+    #[ignore]
+    fn every_step_card_toggles_on_a_recorded_trace() {
+        let dir = std::path::PathBuf::from(std::env::var("CDW_PROBE_SAMPLES").expect("CDW_PROBE_SAMPLES"));
+        let answer = std::fs::read_to_string(dir.join("curated-root-trace.json")).expect("curated-root-trace.json");
+        let crate::monitoring::model::Probe::Ok { data } = crate::monitoring::probe::parse::<Trace>(&answer, "") else { panic!("not ok") };
+        VIEW.with(|v| *v.borrow_mut() = crate::monitoring::trace_view::build(&data, chrono::Utc::now()));
+        every_step_card_toggles_its_own_step();
     }
 
     #[test]
-    fn members_of_one_depth_spread_on_a_grid() {
-        assert_ne!(member_xy(0), member_xy(1));
-        assert_eq!(member_xy(4).0, member_xy(0).0);
-        assert!(member_xy(4).1 > member_xy(0).1);
+    fn every_step_card_toggles_its_own_step() {
+        dioxus::html::set_event_converter(Box::new(dioxus::html::SerializedHtmlEventConverter));
+        let count = listeners(VirtualDom::new(Harness).rebuild_to_vec()).len();
+        let mut opened = vec![];
+        // A fresh page per listener: a tab button would otherwise unmount the cards clicked after it.
+        for index in 0..count {
+            OPENED.with(|o| o.borrow_mut().clear());
+            let mut dom = VirtualDom::new(Harness);
+            let id = listeners(dom.rebuild_to_vec())[index];
+            click(&dom, id);
+            dom.render_immediate_to_vec();
+            let Some(Some(step)) = last_opened() else { continue };
+            click(&dom, id);
+            dom.render_immediate_to_vec();
+            assert_eq!(last_opened(), Some(None), "a second click on {step:?} closes it");
+            opened.push(step);
+        }
+        opened.sort();
+        let steps = fixture_view().steps.len();
+        assert_eq!(opened.len(), steps, "one working card per step");
+        opened.dedup();
+        assert_eq!(opened.len(), steps, "each card opens its own step");
     }
 }
