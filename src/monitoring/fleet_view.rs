@@ -417,6 +417,7 @@ pub fn home(o: &Overview, now: DateTime<Utc>) -> Home {
         ("Extractions stalled".to_string(), format!("{stalled} of {}", o.stuck.len())),
         ("Curated documents".to_string(), o.curated_rows.to_string()),
         ("Dispatched, not curated".to_string(), o.dispatched_not_curated.to_string()),
+        ("Delivered to PACE".to_string(), o.pace_delivered.len().to_string()),
         ("Reference sets".to_string(), o.references.len().to_string()),
         ("Cosmos".to_string(), format!("{}/{}", o.env.cosmos_account, o.env.cosmos_db)),
         ("Storage".to_string(), o.env.store_account.clone()),

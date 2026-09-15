@@ -207,8 +207,14 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
 
     let go = use_callback(move |s: Screen| {
         let here = Location { screen: *screen.peek(), traced: traced.peek().clone() };
-        let to = Location { screen: s, traced: here.traced.clone() };
+        // "Document trace" while a trace is open returns to the start page; Back leads to the trace again.
+        let restart = s == Screen::Trace && here.screen == Screen::Trace;
+        let to = Location { screen: s, traced: if restart { String::new() } else { here.traced.clone() } };
         push_location(&mut history.write(), here, &to);
+        if restart {
+            traced.set(String::new());
+            query.set(String::new());
+        }
         screen.set(s);
         let e = env();
         match s {
@@ -279,6 +285,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         _ => None,
     };
     let nav = vec![
+        NavItem { screen: Screen::Home, icon: "database", label: format!("{env_name} today"), badge: None, hot: false },
         NavItem { screen: Screen::Trace, icon: "magnifying-glass", label: "Document trace".into(), badge: None, hot: false },
         NavItem {
             screen: Screen::Queue,
@@ -309,7 +316,6 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
             hot: stale_ref,
         },
         NavItem { screen: Screen::Timing, icon: "timer", label: "Step timing".into(), badge: None, hot: false },
-        NavItem { screen: Screen::Home, icon: "database", label: format!("{env_name} today"), badge: None, hot: false },
     ];
 
     let any_pending = ov.pending || trace.read().pending || dead.read().pending || timing.read().pending;
@@ -398,7 +404,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
                             on_trace,
                         }
                     },
-                    None => rsx! { home::NoMatch { trace: data, env_name: env_name.clone(), oldest_parked: oldest_parked.clone(), on_trace, on_go } },
+                    None => rsx! { home::NoMatch { trace: data, env_name: env_name.clone(), oldest_parked: oldest_parked.clone(), on_trace } },
                 },
             }
         }
@@ -415,24 +421,24 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         },
         Screen::Refs => match gate(&ov, "reference pointers", &env_name, refresh) {
             Err(card) => card,
-            Ok((o, pending)) => rsx! { fleet::RefsScreen { rows: fleet_view::references(&o, now), refreshing: pending, on_go } },
+            Ok((o, pending)) => rsx! { fleet::RefsScreen { rows: fleet_view::references(&o, now), refreshing: pending } },
         },
         Screen::Dead => match gate(&dead.read().clone(), "dead-letter queues", &env_name, refresh) {
             Err(card) => card,
             Ok((d, pending)) => rsx! {
-                fleet::DeadScreen { rows: fleet_view::dead_letters(&d, now), data: d.clone(), refreshing: pending, on_trace, on_go }
+                fleet::DeadScreen { rows: fleet_view::dead_letters(&d, now), data: d.clone(), refreshing: pending, on_trace }
             },
         },
         Screen::Timing => match gate(&timing.read().clone(), "step timing", &env_name, refresh) {
             Err(card) => card,
             Ok((t, pending)) => rsx! {
-                fleet::TimingScreen { rows: fleet_view::timing(&t, now), documents: t.docs.len(), truncated: t.truncated, refreshing: pending, on_go }
+                fleet::TimingScreen { rows: fleet_view::timing(&t, now), documents: t.docs.len(), truncated: t.truncated, refreshing: pending }
             },
         },
         Screen::Home => match gate(&ov, "the environment", &env_name, refresh) {
             Err(card) => card,
             Ok((o, pending)) => rsx! {
-                home::HomeScreen { home: fleet_view::home(&o, now), overview: o.clone(), refreshing: pending, on_trace, on_go }
+                home::HomeScreen { home: fleet_view::home(&o, now), overview: o.clone(), refreshing: pending, on_trace }
             },
         },
     };

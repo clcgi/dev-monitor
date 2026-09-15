@@ -1,5 +1,4 @@
 use super::kit::*;
-use super::Screen;
 use crate::monitoring::fleet_view::{paginate, sorted, toggle, DeadRow, Kpi, QueueRow, RefRow, Sort, StuckRow, TimingRow, PAGE_SIZE};
 use crate::monitoring::format as fmt;
 use crate::monitoring::model::DeadLetters;
@@ -31,7 +30,6 @@ fn KpiCard(kpi: Kpi) -> Element {
     let unit = format!("{}color:{DIM}", mono(400, 10.5));
     rsx! {
         div { style: "border:1px solid {BORDER};border-radius:14px;background:{CARD};padding:14px 16px;position:relative;min-width:0",
-            div { style: "position:absolute;top:-1px;left:-1px;width:9px;height:9px;border-top:1px solid {fg};border-left:1px solid {fg}" }
             div { style: "{label}", "{kpi.label}" }
             div { style: "display:flex;align-items:baseline;gap:7px;margin-top:7px;flex-wrap:wrap",
                 span { style: "{value}", "{kpi.value}" }
@@ -198,7 +196,7 @@ pub fn StuckScreen(rows: Vec<StuckRow>, refreshing: bool, on_trace: EventHandler
 }
 
 #[component]
-pub fn RefsScreen(rows: Vec<RefRow>, refreshing: bool, on_go: EventHandler<Screen>) -> Element {
+pub fn RefsScreen(rows: Vec<RefRow>, refreshing: bool) -> Element {
     let mut sort = use_signal(|| Option::<Sort>::None);
     let mut page = use_signal(|| 0usize);
     let shown = paginate(&sorted(&rows, sort()), page());
@@ -240,16 +238,12 @@ pub fn RefsScreen(rows: Vec<RefRow>, refreshing: bool, on_go: EventHandler<Scree
                     Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| page.set(p) }
                     Footnote { text: "Read from the reference container's {set}/current.json. A generation becomes visible only when this pointer flips, so its builtAt is when the platform could first resolve against it.".to_string() }
             }
-            div { style: "display:flex;gap:10px",
-                ActionButton { label: "Parked queue".to_string(), icon: "tray", primary: true, onclick: move |_| on_go.call(Screen::Queue) }
-                ActionButton { label: "Stuck extractions".to_string(), icon: "pause-circle", primary: false, onclick: move |_| on_go.call(Screen::Stuck) }
-            }
         }
     }
 }
 
 #[component]
-pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_trace: EventHandler<String>, on_go: EventHandler<Screen>) -> Element {
+pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_trace: EventHandler<String>) -> Element {
     let mut sort = use_signal(|| Option::<Sort>::None);
     let mut page = use_signal(|| 0usize);
     let shown = paginate(&sorted(&rows, sort()), page());
@@ -337,16 +331,12 @@ pub fn DeadScreen(rows: Vec<DeadRow>, data: DeadLetters, refreshing: bool, on_tr
                 }
                     Pager { page: eg_shown.page, pages: eg_shown.pages, total: eg_shown.total, on_page: move |p| eg_page.set(p) }
             }
-            div { style: "display:flex;gap:10px",
-                ActionButton { label: "Parked queue".to_string(), icon: "tray", primary: true, onclick: move |_| on_go.call(Screen::Queue) }
-                ActionButton { label: "Stuck extractions".to_string(), icon: "pause-circle", primary: false, onclick: move |_| on_go.call(Screen::Stuck) }
-            }
         }
     }
 }
 
 #[component]
-pub fn TimingScreen(rows: Vec<TimingRow>, documents: usize, truncated: bool, refreshing: bool, on_go: EventHandler<Screen>) -> Element {
+pub fn TimingScreen(rows: Vec<TimingRow>, documents: usize, truncated: bool, refreshing: bool) -> Element {
     let mut sort = use_signal(|| Option::<Sort>::None);
     let shown = sorted(&rows, sort());
     let columns = "1.8fr .9fr .9fr .8fr 1fr 1fr";
@@ -398,10 +388,6 @@ pub fn TimingScreen(rows: Vec<TimingRow>, documents: usize, truncated: bool, ref
                         ),
                     }
                 }
-            }
-            div { style: "display:flex;gap:10px",
-                ActionButton { label: "Parked queue".to_string(), icon: "tray", primary: true, onclick: move |_| on_go.call(Screen::Queue) }
-                ActionButton { label: "Stuck extractions".to_string(), icon: "pause-circle", primary: false, onclick: move |_| on_go.call(Screen::Stuck) }
             }
         }
     }

@@ -221,6 +221,8 @@ pub struct Overview {
     pub curated: Vec<Doc>,
     pub curated_rows: u64,
     pub dispatched_not_curated: u64,
+    /// PACE's delivery manifest: every path delivered so far, latest last.
+    pub pace_delivered: Vec<String>,
     pub stuck: Vec<StuckRoot>,
     pub sources: Vec<SourceCfg>,
     pub references: Vec<RefPointer>,

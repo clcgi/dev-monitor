@@ -106,6 +106,7 @@ pub enum StepId {
     Dispatched,
     Extracted,
     Curated,
+    Pace,
 }
 
 /// Log groups. Steps map onto them so selecting a step opens its logs.
@@ -124,7 +125,7 @@ impl StepId {
         match self {
             StepId::Received | StepId::Validated | StepId::Admitted => GroupId::Admitted,
             StepId::Reference => GroupId::Reference,
-            StepId::Promoted | StepId::Dispatched | StepId::Curated => GroupId::Promotion,
+            StepId::Promoted | StepId::Dispatched | StepId::Curated | StepId::Pace => GroupId::Promotion,
             StepId::Extracted => GroupId::Extraction,
         }
     }
@@ -342,7 +343,8 @@ pub struct TraceView {
     pub live: Live,
 }
 
-pub const ZONES: [&str; 5] = ["landing", "raw", "quarantine", "rejected", "curated"];
+/// PACE last: deliver_to_pace copies from curated, so it is downstream of every other zone.
+pub const ZONES: [&str; 6] = ["landing", "raw", "quarantine", "rejected", "curated", "pace"];
 
 struct Ctx<'a> {
     t: &'a Trace,
@@ -774,6 +776,7 @@ fn steps(cx: &Ctx) -> Vec<Step> {
         step_dispatched(cx),
         step_extracted(cx),
         step_curated(cx),
+        step_pace(cx),
     ]
 }
 
@@ -1212,6 +1215,39 @@ fn step_curated(cx: &Ctx) -> Step {
     s
 }
 
+fn step_pace(cx: &Ctx) -> Step {
+    let r = cx.root;
+    let mut s = step(StepId::Pace, "Delivered to PACE", Status::Waiting, Some(Prov::Checked));
+    let check = cx.blob("pace");
+    let address = check.and_then(|b| b.path.as_ref().map(|p| format!("{}/{p}", b.container)));
+    if !check.is_some_and(|b| b.container_exists) {
+        s.status = Status::NotBuilt;
+        s.prov = None;
+        s.detail = "no PACE consumption zone here".into();
+        s.why = "This storage account has no PACE consumption container, so nothing is delivered in this environment.".into();
+    } else if cx.present("pace") {
+        s.status = Status::Done;
+        s.detail = "delivered to PACE's consumption zone".into();
+        s.why = "PACE's daily run copied this document from curated into its consumption zone and recorded it in the delivery manifest.".into();
+        s.meta.extend(address.map(|a| fact("PATH", a)));
+    } else if cx.t.is_archive || r.derivation_step.is_some() || r.is_member() {
+        s.status = Status::Skipped;
+        s.detail = "only originals are delivered".into();
+        s.why = "PACE receives originals only: never an archive, one of its members, or a derived output.".into();
+    } else if cx.curated_address().is_none() {
+        s.detail = "waits on curated".into();
+        s.why = "PACE's run reads from curated, and this document has no curated copy yet.".into();
+    } else if address.is_none() {
+        s.status = Status::Skipped;
+        s.detail = "no PACE address".into();
+        s.why = "The register holds no project or document number for it, so delivery cannot build a PACE path.".into();
+    } else {
+        s.detail = "not delivered yet".into();
+        s.why = "The daily run (09:00 UTC) delivers curated originals that PACE's delivery rule accepts. This one is not in the zone: the rule declines it, or the run has not reached it.".into();
+    }
+    s
+}
+
 fn replica(cx: &Ctx) -> Option<String> {
     cx.t.logs.entries.iter().rev().find_map(|e| e.replica.clone())
 }
@@ -1447,6 +1483,11 @@ fn zone_row(cx: &Ctx, zone: &str) -> ZoneRow {
             ("rejected", false) => "Nothing uploaded yet, so nothing to reject.".into(),
             ("curated", true) => "The consumer-facing copy.".into(),
             ("curated", false) if cx.t.is_archive => "Archive roots are not offered to consumers; their members are.".into(),
+            ("pace", true) => "Delivered to PACE's consumption zone by the daily run.".into(),
+            ("pace", false) if check.and_then(|b| b.path.as_ref()).is_none() => "No PACE address: the register holds no project or document number for it.".into(),
+            ("pace", false) if cx.t.is_archive || r.derivation_step.is_some() || r.is_member() => "Only originals are delivered to PACE, never archives, members or derived outputs.".into(),
+            ("pace", false) if cx.curated_address().is_none() => "Not delivered: PACE reads from curated, and this document has no curated copy.".into(),
+            ("pace", false) => "Not delivered: the daily run (09:00 UTC) copies only what PACE's delivery rule accepts.".into(),
             _ => "No curated copy for this document.".into(),
         };
         (tag, note)
@@ -2221,6 +2262,28 @@ mod tests {
         let step = by_id(&v, StepId::Curated);
         assert_eq!(step.status, Status::Done);
         assert!(step.detail.contains("1 of 2 members"), "{}", step.detail);
+    }
+
+    #[test]
+    fn pace_is_a_zone_after_curated_with_the_reason_nothing_was_delivered() {
+        let mut t = parked();
+        let pace = |exists: bool| BlobCheck { zone: "pace".into(), container: "pace-consumption".into(), container_exists: true, path: Some("SO1/001-x/00/g.pdf".into()), exists: Some(exists), size: exists.then_some(1), last_modified: None, error: None };
+        t.blobs.push(pace(false));
+        let v = build(&t, now()).unwrap();
+        assert_eq!(v.zones.last().map(|z| z.zone.as_str()), Some("pace"));
+        let row = v.zones.iter().find(|z| z.zone == "pace").unwrap();
+        assert_eq!(row.tag, "no object");
+        assert!(row.note.contains("no curated copy"), "{}", row.note);
+        let step = by_id(&v, StepId::Pace);
+        assert_eq!((step.status, step.detail.as_str()), (Status::Waiting, "waits on curated"));
+        assert_eq!(v.steps.last().map(|s| s.id), Some(StepId::Pace), "PACE comes after curated");
+
+        *t.blobs.last_mut().unwrap() = pace(true);
+        let delivered = build(&t, now()).unwrap();
+        let row = delivered.zones.iter().find(|z| z.zone == "pace").unwrap();
+        assert!(row.present && row.note.starts_with("Delivered"), "{}", row.note);
+        assert_eq!(by_id(&delivered, StepId::Pace).status, Status::Done);
+        assert_ne!(delivered.zone_at, Some("pace"), "a delivered copy is not where the document lives");
     }
 
     #[test]
