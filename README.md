@@ -67,6 +67,12 @@ The file indicator is sent upper-cased (`RO`/`RW`), which is what the platform p
 `--verbatim-indicator` sends the manifest's own lowercase spelling instead — that is how
 the misfiling of `rw` documents under `Official/` was found, and it reproduces it.
 
+The **DLH metadata** step sits between Event Grid and Raw. It verifies the resolved
+`reference.*` attributes on this upload's catalogue record and reports the cache's
+`referenceDataAsOf` timestamp. Ingestion reads the reference cache; the separate
+`reference_mirror` function refreshes it from DLH. A cache miss (`PendingMetadata`)
+leaves this step incomplete. An upload rejected by the API never reaches it.
+
 ## Workflow Flows
 
 `tools/flow_*.py` drive the real DEV pipeline through the real gateway.

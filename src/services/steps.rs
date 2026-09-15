@@ -44,6 +44,9 @@ pub fn normalise(raw: &str) -> String {
 /// same position.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct StepCatalog {
+    /// Version of built-in additions applied to a saved catalog.
+    #[serde(default)]
+    pub schema_version: u32,
     pub steps: Vec<StepDef>,
 }
 
@@ -54,10 +57,7 @@ impl Default for StepCatalog {
 }
 
 impl StepCatalog {
-    /// The built-in set: exactly the names, icons and order the app shipped
-    /// with before any of this was configurable. An install with no config file
-    /// must be indistinguishable from that, which is the acceptance test for
-    /// the whole change.
+    /// The built-in stages in pipeline order, including the reference-cache lookup.
     pub fn defaults() -> Self {
         let step = |id: &str, name: &str, icon: &str, on_chain: bool| StepDef {
             id: id.to_string(),
@@ -67,12 +67,14 @@ impl StepCatalog {
             on_chain,
         };
         Self {
+            schema_version: 1,
             steps: vec![
                 step("neo", "NEO", "database", true),
                 step("authentication", "Authentication", "lock-key", true),
                 step("apim", "APIM", "cloud", true),
                 step("landing", "Landing", "folder-simple", true),
                 step("eventgrid", "Event Grid", "lightning", true),
+                step("dlhmetadata", "DLH metadata", "database", true),
                 step("raw", "Raw", "file-code", true),
                 step("servicebus", "Service Bus", "envelope-simple", true),
                 step("containerappjobs", "Container App Jobs", "cpu", true),
@@ -82,6 +84,21 @@ impl StepCatalog {
                 step("quarantine", "Quarantine", "warning-circle", false),
                 step("rejected", "Rejected", "x-circle", false),
             ],
+        }
+    }
+
+    /// Add the metadata stage once to older saved catalogs, preserving custom
+    /// names and ordering. Saving after an intentional deletion keeps it deleted.
+    pub fn upgrade(&mut self) {
+        if self.schema_version < 1 {
+            if self.resolve("DLHMetadata").is_none() {
+                let stage = Self::defaults().get("dlhmetadata").unwrap().clone();
+                let index = self.steps.iter().position(|s| s.id == "raw")
+                    .or_else(|| self.steps.iter().position(|s| s.id == "eventgrid").map(|i| i + 1))
+                    .unwrap_or(self.steps.len());
+                self.steps.insert(index, stage);
+            }
+            self.schema_version = 1;
         }
     }
 
@@ -161,17 +178,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_defaults_are_what_the_app_shipped_with() {
-        // THE ACCEPTANCE TEST for the whole change: an install with no config
-        // must be indistinguishable from the hardcoded version.
+    fn the_defaults_include_metadata_before_raw() {
         let c = StepCatalog::defaults();
-        assert_eq!(c.steps.len(), 13);
-        assert_eq!(c.chain().len(), 11, "Quarantine and Rejected are branches");
+        assert_eq!(c.steps.len(), 14);
+        assert_eq!(c.chain().len(), 12, "Quarantine and Rejected are branches");
         let names: Vec<&str> = c.chain().iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
             [
-                "NEO", "Authentication", "APIM", "Landing", "Event Grid", "Raw",
+                "NEO", "Authentication", "APIM", "Landing", "Event Grid", "DLH metadata", "Raw",
                 "Service Bus", "Container App Jobs", "Processing", "Curated", "Verification"
             ]
         );
@@ -192,7 +207,7 @@ mod tests {
     #[test]
     fn an_alias_resolves_to_its_step() {
         let mut c = StepCatalog::defaults();
-        c.steps[7].aliases.push("CAJ".into());
+        c.steps.iter_mut().find(|s| s.id == "containerappjobs").unwrap().aliases.push("CAJ".into());
         assert_eq!(c.resolve("CAJ").as_deref(), Some("containerappjobs"));
         assert_eq!(c.resolve("caj").as_deref(), Some("containerappjobs"));
     }
@@ -202,7 +217,7 @@ mod tests {
         // The whole reason identity is `id` and not `name`. A user renames the
         // label; every script still emits [CDW_STEP: Raw].
         let mut c = StepCatalog::defaults();
-        c.steps[5].name = "Raw storage".into();
+        c.steps.iter_mut().find(|s| s.id == "raw").unwrap().name = "Raw storage".into();
         assert_eq!(c.resolve("Raw").as_deref(), Some("raw"));
         assert_eq!(c.resolve("Raw storage").as_deref(), Some("raw"));
     }
@@ -214,7 +229,7 @@ mod tests {
         let mut c = StepCatalog::defaults();
         c.remove("raw");
         assert_eq!(c.resolve("Raw"), None);
-        assert_eq!(c.chain().len(), 10);
+        assert_eq!(c.chain().len(), 11);
         assert_eq!(c.name_of("raw"), "raw", "falls back to the id rather than empty");
         assert_eq!(c.icon_of("raw"), "ph-question");
     }
@@ -254,7 +269,7 @@ mod tests {
     #[test]
     fn chain_index_is_none_for_a_branch() {
         let c = StepCatalog::defaults();
-        assert_eq!(c.chain_index("raw"), Some(5));
+        assert_eq!(c.chain_index("raw"), Some(6));
         assert_eq!(c.chain_index("quarantine"), None);
         assert_eq!(c.chain_index("rejected"), None);
     }
