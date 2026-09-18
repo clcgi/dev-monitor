@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 use crate::services::steps::{StepCatalog, StepId};
 
@@ -5,8 +7,12 @@ use crate::services::steps::{StepCatalog, StepId};
 pub struct WorkflowStepperProps {
     /// The stages to draw.
     pub steps: Option<Vec<StepId>>,
-    /// Seconds spent in the CURRENT stage, when one is running.
+    /// Seconds spent in the CURRENT stage, when one is running. Live: it is
+    /// recomputed on the one-second heartbeat, and is NOT in `step_seconds`
+    /// until the run leaves the stage.
     pub step_elapsed_s: Option<u64>,
+    /// Seconds already banked per stage -- what each one took.
+    pub step_seconds: HashMap<StepId, u64>,
     pub active_step: Option<StepId>,
     pub step_history: Vec<StepId>,
     pub is_running: bool,
@@ -76,6 +82,15 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
             NodeState::Zone      => "text-warn",
             NodeState::Pending   => "text-fg-faint",
         };
+        // The stage the run is STANDING ON, which is not `is_current`: a branch
+        // node (Quarantine) is drawn off the chain and never the current index.
+        let is_here = props.active_step.as_deref() == Some(step.as_str());
+        let pill = match state {
+            NodeState::Completed => "bg-success/15 text-success",
+            NodeState::Failed    => "bg-danger/15 text-danger",
+            NodeState::Zone      => "bg-warn/15 text-warn",
+            _                    => "bg-accent/15 text-accent",
+        };
         // RESPONSIVE: nodes were a fixed 120px, so eleven of them needed 1320px.
         let scale = if is_current { "scale-110" } else { "" };
 
@@ -121,14 +136,17 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                 div { class: "hidden text-center text-[10px] leading-tight sm:block {label}",
                     "{name}"
                 }
-                // Seconds in this stage: the only thing separating waiting from stuck.
-                if is_current && props.is_running {
-                    if let Some(secs) = props.step_elapsed_s {
-                        span {
-                            class: "rounded-full bg-accent/15 px-1.5 py-px font-mono text-[9px] \
-                                    tabular-nums text-accent",
-                            {format_elapsed(secs)}
-                        }
+                // WHAT THIS STAGE TOOK. On the running stage it is the live
+                // clock -- the only thing separating waiting from stuck -- and
+                // on the stages behind it, the time the run actually spent
+                // there, which is the question every perf discussion opens with.
+                if let Some(secs) = node_seconds(
+                    props.step_seconds.get(step).copied(),
+                    if is_here && props.is_running { props.step_elapsed_s } else { None },
+                ) {
+                    span {
+                        class: "rounded-full px-1.5 py-px font-mono text-[9px] tabular-nums {pill}",
+                        {format_elapsed(secs)}
                     }
                 }
             }
@@ -188,6 +206,18 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
     }
 }
 
+/// What a node shows: what it banked, plus the live clock when the run is on it.
+///
+/// `None` when neither exists -- a stage nobody reached shows nothing rather
+/// than `0s`, which would read as a stage that took no time. That is exactly
+/// what a run with broken markers looks like.
+fn node_seconds(banked: Option<u64>, live: Option<u64>) -> Option<u64> {
+    match (banked, live) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+    }
+}
+
 /// `45s`, `2m 05s`.
 fn format_elapsed(secs: u64) -> String {
     if secs < 60 {
@@ -216,6 +246,26 @@ fn node_state(step: &str, active: Option<&str>, completed: &[StepId], failed: bo
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
+
+    #[test]
+    fn a_stage_nobody_reached_shows_no_time_rather_than_zero() {
+        // `0s` on every unvisited node reads as eleven stages that took no
+        // time, which is exactly the report a broken marker produces.
+        assert_eq!(node_seconds(None, None), None);
+    }
+
+    #[test]
+    fn a_finished_stage_shows_what_it_banked() {
+        assert_eq!(node_seconds(Some(42), None), Some(42));
+    }
+
+    #[test]
+    fn the_running_stage_counts_on_from_what_it_already_spent() {
+        // A chain that comes back to a stage (neo_simulator marks APIM twice)
+        // has banked seconds AND a live clock on the same node.
+        assert_eq!(node_seconds(Some(30), Some(5)), Some(35));
+        assert_eq!(node_seconds(None, Some(5)), Some(5));
+    }
 
     #[test]
     fn reaching_a_later_stage_does_not_complete_unobserved_stages() {
