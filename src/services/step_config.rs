@@ -23,7 +23,10 @@ pub fn load() -> StepCatalog {
         return StepCatalog::defaults();
     };
     match serde_json::from_str::<StepCatalog>(&text) {
-        Ok(catalog) if !catalog.steps.is_empty() => catalog,
+        Ok(mut catalog) if !catalog.steps.is_empty() => {
+            catalog.upgrade();
+            catalog
+        },
         // An EMPTY list is treated as a broken file rather than an honest
         // choice: it renders no stepper at all, which is indistinguishable
         // from the app being broken.
@@ -51,6 +54,22 @@ pub fn save(catalog: &StepCatalog) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::services::steps::StepDef;
+
+    #[test]
+    fn old_saved_catalog_gains_metadata_before_raw_without_resetting_customisation() {
+        let json = r#"{"steps":[{"id":"raw","name":"My raw storage","icon":"folder"}]}"#;
+        let mut catalog: StepCatalog = serde_json::from_str(json).unwrap();
+        catalog.upgrade();
+        assert_eq!(catalog.steps[0].id, "dlhmetadata");
+        assert_eq!(catalog.steps[1].name, "My raw storage");
+        catalog.upgrade();
+        assert_eq!(catalog.steps.len(), 2);
+        catalog.remove("dlhmetadata");
+        let saved = serde_json::to_string(&catalog).unwrap();
+        let mut reloaded: StepCatalog = serde_json::from_str(&saved).unwrap();
+        reloaded.upgrade();
+        assert!(reloaded.resolve("DLHMetadata").is_none());
+    }
 
     #[test]
     fn a_catalog_survives_a_round_trip() {

@@ -254,6 +254,7 @@ pub fn StateCard(kind: StateKind, what: String, env: String, message: String, on
         StateKind::Unavailable => ("plugs", AMBER, format!("{what} is unavailable"), WARN_BG, WARN_BD),
         StateKind::Error => ("warning-circle", CORAL, format!("Could not read {what}"), BAD_BG, BAD_BD),
     };
+    let login_commands = crate::monitoring::probe::login_commands(&env);
     let spin = if kind == StateKind::Loading { "animation:cdwm-spin 1s linear infinite;" } else { "" };
     let title_style = format!("{}color:{TEXT_STRONG};margin-top:12px", sans(600, 16.0));
     let body_style = format!("{}line-height:1.7;color:{TEXT_BODY};margin-top:6px;overflow-wrap:anywhere", sans(400, 12.5));
@@ -274,7 +275,7 @@ pub fn StateCard(kind: StateKind, what: String, env: String, message: String, on
             if kind == StateKind::Auth {
                 div { style: "display:flex;flex-direction:column;gap:8px",
                     div { style: "{note_style}", "SIGN IN WITH THE AZURE CLI, THEN RETRY" }
-                    div { style: "{code_style}", "az login\naz account set --subscription <the {env} subscription>" }
+                    div { style: "{code_style}", "{login_commands}" }
                     div { style: "{note_style}", "The subscription and every resource name come from deploy/00-variables.sh for CDW_ENV={env}; nothing here is hard-coded." }
                 }
             }

@@ -26,7 +26,14 @@ pub fn ChoicePicker(props: ChoicePickerProps) -> Element {
                 {
                     let flag = choice.flag.clone();
                     let selected = props.chosen.get(&choice.flag).cloned().unwrap_or_default();
-                    let empty = choice.values.is_empty();
+                    // NARROWED BY WHAT THE OTHER PICKERS HOLD, not the whole
+                    // column. `--case` lists only the documents delivered in
+                    // the copy `--indicator` names; offering all of them beside
+                    // an independent RO/RW list lets an operator pick a pair
+                    // that does not exist -- PEDWPIPF999009A1 has no RW -- and
+                    // find out only after pressing Run.
+                    let values = choice.values_for(&props.chosen);
+                    let empty = values.is_empty();
                     rsx! {
                         div { key: "{choice.flag}", class: "flex flex-col gap-1.5",
                             div { class: "flex items-center gap-2.5",
@@ -41,7 +48,7 @@ pub fn ChoicePicker(props: ChoicePickerProps) -> Element {
                                             hover:border-fg transition-colors",
                                     value: "{selected}",
                                     onchange: move |e| props.on_choose.call((flag.clone(), e.value())),
-                                    for value in choice.values.iter() {
+                                    for value in values.iter() {
                                         option { key: "{value}", value: "{value}", "{value}" }
                                     }
                                 }

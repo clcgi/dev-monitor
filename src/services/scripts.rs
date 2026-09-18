@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -37,6 +38,45 @@ pub struct ScriptChoice {
     /// not have been fetched yet, and the picker says so rather than offering
     /// nothing and letting the script be launched without the flag.
     pub values: Vec<String>,
+    /// The flag this one narrows by, or empty. Declared
+    /// `@file:source_filename?file_type_indicator=--indicator`.
+    ///
+    /// WITHOUT IT TWO PICKERS CAN NAME A PAIR THAT DOES NOT EXIST.
+    /// PEDWPIPF999009A1 is delivered only as RO, so offering the whole case
+    /// list beside an independent RO/RW list lets an operator choose
+    /// `--case PEDWPIPF999009A1 --indicator RW` -- which the script can only
+    /// refuse, after they have pressed Run.
+    pub depends_on: String,
+    /// The column compared against the value chosen for `depends_on`.
+    pub filter_column: String,
+    /// `(value, filter value)` in file order, deduped on the pair. Only read
+    /// when `depends_on` is set; `values_for` narrows it per selection.
+    pub rows: Vec<(String, String)>,
+}
+
+impl ScriptChoice {
+    /// What this picker may offer, given what every other picker holds.
+    ///
+    /// FALLS BACK TO THE WHOLE LIST rather than to nothing when the flag it
+    /// depends on has no value yet. An empty dropdown reads as "the file has
+    /// not been fetched", which is a different problem with a different fix,
+    /// and it would also make the choice unselectable in the one state where
+    /// the operator has done nothing wrong.
+    pub fn values_for(&self, chosen: &HashMap<String, String>) -> Vec<String> {
+        if self.depends_on.is_empty() {
+            return self.values.clone();
+        }
+        let Some(selected) = chosen.get(&self.depends_on).filter(|v| !v.is_empty()) else {
+            return self.values.clone();
+        };
+        let mut seen = std::collections::HashSet::new();
+        self.rows
+            .iter()
+            .filter(|(_, against)| against == selected)
+            .map(|(value, _)| value.clone())
+            .filter(|value| seen.insert(value.clone()))
+            .collect()
+    }
 }
 
 /// What a script says about the pipeline stages it can reach.
@@ -180,7 +220,8 @@ pub fn parse_meta(
     meta
 }
 
-/// One `CDW_CHOICE` line: `--case @tools/fixtures/m.csv:source_filename  help`.
+/// One `CDW_CHOICE` line: `--case @tools/fixtures/m.csv:source_filename  help`,
+/// or an inline list, `--indicator RO|RW  help`.
 ///
 /// Returns None rather than an empty choice when the source is absent. A
 /// choice with nowhere to read from would render as a dropdown that can never
@@ -193,25 +234,90 @@ fn parse_choice(payload: &str, repo_root: &Path) -> Option<ScriptChoice> {
         return None;
     }
     let rest = rest.trim();
+    // INLINE VALUES, for a flag whose vocabulary is the script's own rather
+    // than a column of a file: `--indicator RO|RW` names the two copies a DMS
+    // document is delivered in. Read as a file spec it parses to nothing, the
+    // choice is dropped, and the run silently sends the script's default copy.
+    if !rest.starts_with('@') {
+        let (list, help) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let values: Vec<String> = list
+            .split('|')
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        if values.len() < 2 {
+            return None;
+        }
+        return Some(ScriptChoice {
+            flag: flag.to_string(),
+            source: String::new(),
+            column: String::new(),
+            help: help.trim().to_string(),
+            values,
+            depends_on: String::new(),
+            filter_column: String::new(),
+            rows: Vec::new(),
+        });
+    }
     let spec = rest.strip_prefix('@')?;
     // rsplit, not split: a Windows-shaped path would contain a drive colon,
     // and the COLUMN is always the last segment.
     let (source, tail) = spec.rsplit_once(':')?;
-    let (column, help) = tail.split_once(char::is_whitespace).unwrap_or((tail, ""));
+    let (column_spec, help) = tail.split_once(char::is_whitespace).unwrap_or((tail, ""));
+
+    // `column?filtercol=--flag` narrows this list by what another picker holds.
+    // MALFORMED IS DROPPED, not ignored: a spec that parsed to "no dependency"
+    // would render as a full, independent list -- exactly the behaviour the
+    // author was trying to replace, and indistinguishable from it on screen.
+    let (column, depends_on, filter_column) = match column_spec.split_once('?') {
+        None => (column_spec, String::new(), String::new()),
+        Some((column, dependency)) => match dependency.split_once('=') {
+            Some((filter_column, flag)) if !filter_column.is_empty() && flag.starts_with('-') => {
+                (column, flag.to_string(), filter_column.to_string())
+            }
+            _ => return None,
+        },
+    };
     if source.is_empty() || column.is_empty() {
         return None;
     }
 
+    let path = repo_root.join(source);
     Some(ScriptChoice {
         flag: flag.to_string(),
         source: source.to_string(),
         column: column.to_string(),
         help: help.trim().to_string(),
-        values: read_column(&repo_root.join(source), column),
+        values: read_column(&path, column),
+        // Only paid for when a dependency was declared: every other choice in
+        // the app reads one column and this would double its file work.
+        rows: if filter_column.is_empty() {
+            Vec::new()
+        } else {
+            read_pairs(&path, column, &filter_column)
+        },
+        depends_on,
+        filter_column,
     })
 }
 
-/// One column of a delimited text file, in file order.
+/// One column of a delimited text file, deduped, in file order.
+fn read_column(path: &Path, column: &str) -> Vec<String> {
+    read_pairs(path, column, "")
+        .into_iter()
+        .map(|(value, _)| value)
+        .collect()
+}
+
+/// One column, each value paired with another column's value on the same row.
+///
+/// The pairing is what lets one picker narrow another: the corpus manifest
+/// names a document in `source_filename` and says which copy it is in
+/// `file_type_indicator`, and only the two together identify a row.
+///
+/// `against` empty pairs every value with an empty string, which is what
+/// `read_column` wants -- one primitive, so the BOM, the delimiter sniff and
+/// the dedupe cannot drift between the two readers.
 ///
 /// THE DELIMITER IS SNIFFED FROM THE HEADER, and only from the header: the
 /// corpus manifest is semicolon-delimited and holds values containing commas
@@ -221,7 +327,12 @@ fn parse_choice(payload: &str, repo_root: &Path) -> Option<ScriptChoice> {
 /// Quoted fields are NOT supported. The one file this reads has none, and a
 /// half-written quote parser that looks like it works is worse than an
 /// explicit limit.
-fn read_column(path: &Path, column: &str) -> Vec<String> {
+///
+/// DEDUPED ON THE PAIR, IN FILE ORDER: the manifest carries a DMS document
+/// twice, once per copy, naming the same file. Deduping on the value alone
+/// would drop the second row and with it the only evidence that the document
+/// has an RW copy at all.
+fn read_pairs(path: &Path, column: &str, against: &str) -> Vec<(String, String)> {
     // A missing file is the ordinary state before anything has been fetched,
     // so it reads as "no values", not as an error.
     let Ok(text) = fs::read_to_string(path) else {
@@ -234,15 +345,36 @@ fn read_column(path: &Path, column: &str) -> Vec<String> {
         return Vec::new();
     };
     let delimiter = if header.contains(';') { ';' } else { ',' };
-    let Some(index) = header.split(delimiter).position(|h| h.trim() == column) else {
+    let position = |name: &str| header.split(delimiter).position(|h| h.trim() == name);
+    let Some(index) = position(column) else {
         return Vec::new();
     };
+    // A DECLARED FILTER COLUMN THAT IS NOT THERE YIELDS NOTHING, rather than
+    // every row paired with "". Falling back would offer the unfiltered list
+    // under a picker that says it is filtered.
+    let against_index = if against.is_empty() {
+        None
+    } else {
+        match position(against) {
+            Some(index) => Some(index),
+            None => return Vec::new(),
+        }
+    };
 
+    let mut seen = std::collections::HashSet::new();
     lines
         .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| line.split(delimiter).nth(index))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split(delimiter).collect();
+            let value = fields.get(index)?.trim().to_string();
+            let paired = match against_index {
+                None => String::new(),
+                Some(index) => fields.get(index)?.trim().to_string(),
+            };
+            Some((value, paired))
+        })
+        .filter(|(value, _)| !value.is_empty())
+        .filter(|pair| seen.insert(pair.clone()))
         .collect()
 }
 
@@ -619,6 +751,163 @@ mod tests {
         assert_eq!(meta.args.len(), 1);
         assert_eq!(meta.args[0].flag, "--all");
         assert_eq!(meta.choices.len(), 1);
+    }
+
+    #[test]
+    fn a_document_delivered_as_two_copies_is_offered_once() {
+        // The manifest carries a DMS document twice, RO and RW, naming the same
+        // file. Listed twice the dropdown shows one document as two identical
+        // entries, and neither says which copy it would send.
+        let (root, path) = with_manifest(
+            "choice-copies",
+            "source_filename;file_type_indicator\nHEER.ZIP;RO\nHEER.ZIP;RW\nb.pdf;RO\n",
+        );
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices[0].values, vec!["HEER.ZIP", "b.pdf"]);
+    }
+
+    #[test]
+    fn a_choice_can_list_its_values_inline() {
+        // `--indicator RO|RW` has no file to read: the two copies are the
+        // script's own vocabulary. Ignored, the flag never reaches the picker
+        // and the run sends whichever copy the script defaults to.
+        let root = tempdir("choice-inline");
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let path = write(
+            &tools,
+            "corpus.py",
+            "# CDW_SCRIPT: category=Flows\n\
+             # CDW_CHOICE: --indicator RO|RW  Which copy to send\n",
+        );
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices.len(), 1);
+        assert_eq!(meta.choices[0].flag, "--indicator");
+        assert_eq!(meta.choices[0].values, vec!["RO", "RW"]);
+        assert_eq!(meta.choices[0].help, "Which copy to send");
+    }
+
+    /// A corpus where one document has both copies and one has only RO --
+    /// which is the whole reason a narrowed list exists.
+    fn narrowing_corpus(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = tempdir(tag);
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        write(
+            &tools,
+            "m.csv",
+            "source_filename;file_type_indicator\n\
+             HEER.ZIP;RO\n\
+             HEER.ZIP;RW\n\
+             PEDW.pdf;RO\n",
+        );
+        let script = write(
+            &tools,
+            "corpus.py",
+            "# CDW_SCRIPT: category=Flows\n\
+             # CDW_CHOICE: --indicator @tools/m.csv:file_type_indicator  Which copy\n\
+             # CDW_CHOICE: --case @tools/m.csv:source_filename?file_type_indicator=--indicator  Which document\n",
+        );
+        (root, script)
+    }
+
+    fn chosen(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn a_choice_can_declare_that_it_narrows_by_another_flag() {
+        let (root, script) = narrowing_corpus("choice-narrow-parse");
+        let meta = parse_meta(&script, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        let case = &meta.choices[1];
+        assert_eq!(case.flag, "--case");
+        assert_eq!(case.column, "source_filename");
+        assert_eq!(case.depends_on, "--indicator");
+        assert_eq!(case.filter_column, "file_type_indicator");
+        // The help still parses with the dependency in the way.
+        assert_eq!(case.help, "Which document");
+    }
+
+    #[test]
+    fn a_narrowed_choice_offers_only_the_documents_delivered_in_that_copy() {
+        // THE DEFECT THIS EXISTS FOR. PEDW.pdf has no RW row, so an RW
+        // selection must not offer it; two independent lists did, and the
+        // script could only refuse the pair after the operator pressed Run.
+        let (root, script) = narrowing_corpus("choice-narrow-values");
+        let meta = parse_meta(&script, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        let case = &meta.choices[1];
+        assert_eq!(case.values_for(&chosen(&[("--indicator", "RO")])), vec!["HEER.ZIP", "PEDW.pdf"]);
+        assert_eq!(case.values_for(&chosen(&[("--indicator", "RW")])), vec!["HEER.ZIP"]);
+    }
+
+    #[test]
+    fn the_flag_a_choice_narrows_by_lists_each_value_once() {
+        let (root, script) = narrowing_corpus("choice-narrow-indicator");
+        let meta = parse_meta(&script, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices[0].flag, "--indicator");
+        assert_eq!(meta.choices[0].values, vec!["RO", "RW"]);
+    }
+
+    #[test]
+    fn a_narrowed_choice_with_nothing_chosen_yet_offers_the_whole_column() {
+        // Empty would read as "the file has not been fetched", which is a
+        // different problem with a different fix.
+        let (root, script) = narrowing_corpus("choice-narrow-unset");
+        let meta = parse_meta(&script, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices[1].values_for(&chosen(&[])), vec!["HEER.ZIP", "PEDW.pdf"]);
+    }
+
+    #[test]
+    fn a_choice_with_no_dependency_ignores_what_else_is_chosen() {
+        let root = tempdir("choice-narrow-none");
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        write(&tools, "m.csv", "source_filename;file_type_indicator\nHEER.ZIP;RO\nPEDW.pdf;RO\n");
+        let script = write(
+            &tools,
+            "corpus.py",
+            "# CDW_SCRIPT: category=Flows\n\
+             # CDW_CHOICE: --case @tools/m.csv:source_filename  Which document\n",
+        );
+        let meta = parse_meta(&script, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert!(meta.choices[0].depends_on.is_empty());
+        assert_eq!(meta.choices[0].values_for(&chosen(&[("--indicator", "RW")])), vec!["HEER.ZIP", "PEDW.pdf"]);
+    }
+
+    #[test]
+    fn a_malformed_dependency_drops_the_choice_rather_than_widening_it() {
+        // Read as "no dependency" it would render as a full independent list --
+        // the exact behaviour the author was replacing, and identical on screen.
+        let root = tempdir("choice-narrow-malformed");
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        write(&tools, "m.csv", "source_filename;file_type_indicator\nHEER.ZIP;RO\n");
+        let script = write(
+            &tools,
+            "corpus.py",
+            "# CDW_SCRIPT: category=Flows\n\
+             # CDW_CHOICE: --case @tools/m.csv:source_filename?file_type_indicator  Which document\n",
+        );
+        let meta = parse_meta(&script, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert!(meta.choices.is_empty());
+    }
+
+    #[test]
+    fn narrowing_by_a_column_the_file_does_not_have_offers_nothing() {
+        // Falling back to the unfiltered list would offer every document under
+        // a picker whose help says it is narrowed.
+        let root = tempdir("choice-narrow-absent-column");
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        write(&tools, "m.csv", "source_filename\nHEER.ZIP\n");
+        let script = write(
+            &tools,
+            "corpus.py",
+            "# CDW_SCRIPT: category=Flows\n\
+             # CDW_CHOICE: --case @tools/m.csv:source_filename?file_type_indicator=--indicator  Which\n",
+        );
+        let meta = parse_meta(&script, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert!(meta.choices[0].values_for(&chosen(&[("--indicator", "RO")])).is_empty());
     }
 
     #[test]

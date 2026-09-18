@@ -9,7 +9,7 @@ pub struct EnvSelectorProps {
 
 #[component]
 pub fn EnvironmentSelector(props: EnvSelectorProps) -> Element {
-    let envs = [Environment::Sandbox, Environment::Dev, Environment::Stg];
+    let envs = [Environment::Dev, Environment::Stg];
 
     rsx! {
         div { class: "mb-4 flex flex-wrap gap-1.5",

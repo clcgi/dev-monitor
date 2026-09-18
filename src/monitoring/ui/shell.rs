@@ -85,7 +85,7 @@ pub fn Aside(
 
             div { style: "margin-top:auto;padding:22px 22px 0;display:flex;flex-direction:column;gap:10px",
                 div { style: "display:flex;gap:3px;background:#E9ECEE;border-radius:8px;padding:3px",
-                    for candidate in [Environment::Sandbox, Environment::Dev, Environment::Stg] {
+                    for candidate in [Environment::Dev, Environment::Stg] {
                         {env_button(candidate, env, on_env)}
                     }
                 }
@@ -160,7 +160,6 @@ fn env_button(candidate: Environment, current: Environment, on_env: EventHandler
     let (bg, fg, weight, shadow) = if on { (CARD, TEXT, 700, "0 1px 3px rgba(26,26,26,.16)") } else { ("transparent", TEXT_BODY, 500, "none") };
     let style = format!("flex:1;padding:5px 0;border:none;border-radius:6px;cursor:pointer;background:{bg};color:{fg};box-shadow:{shadow};{}", sans(weight, 12.0));
     let label = match candidate {
-        Environment::Sandbox => "SBX",
         Environment::Dev => "DEV",
         Environment::Stg => "STG",
     };

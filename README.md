@@ -7,7 +7,7 @@ This application provides a controlled UI for automatically discovering, trigger
 ## Features
 
 - **Automated Script Discovery**: Dynamically scans `../CentralDocumentWarehouse/tools/` for `.py` and `.sh` scripts.
-- **Environment Targeting**: Scripts are explicitly run against `sandbox`, `dev`, or `stg`. The application seamlessly passes this to the scripts by exporting `CDW_ENV` and sourcing `deploy/00-variables.sh`.
+- **Environment Targeting**: Scripts are explicitly run against Development (`dev`) or Staging (`stg`). The application seamlessly passes this to the scripts by exporting `CDW_ENV` and sourcing `deploy/00-variables.sh`.
 - **Live Visual Monitoring**: Streams `stdout` and parses `[CDW_STEP: ...]` and `[CDW_RESULT: ...]` markers to drive an animated 11-step pipeline stepper and results panel.
 - **Background Execution**: Prevents UI blocking by executing scripts asynchronously.
 - **Authentication Reminders**: Prompts users to authenticate with Azure (`az login`) every 12 hours.
@@ -66,6 +66,12 @@ and 2.4 GB; `--refetch` re-downloads them.
 The file indicator is sent upper-cased (`RO`/`RW`), which is what the platform parses.
 `--verbatim-indicator` sends the manifest's own lowercase spelling instead — that is how
 the misfiling of `rw` documents under `Official/` was found, and it reproduces it.
+
+The **DLH metadata** step sits between Event Grid and Raw. It verifies the resolved
+`reference.*` attributes on this upload's catalogue record and reports the cache's
+`referenceDataAsOf` timestamp. Ingestion reads the reference cache; the separate
+`reference_mirror` function refreshes it from DLH. A cache miss (`PendingMetadata`)
+leaves this step incomplete. An upload rejected by the API never reaches it.
 
 ## Workflow Flows
 

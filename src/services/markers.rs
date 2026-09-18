@@ -163,8 +163,16 @@ mod tests {
     #[test]
     fn a_user_added_alias_resolves() {
         let mut c = cat();
-        c.steps[7].aliases.push("CAJ".into());
+        c.steps.iter_mut().find(|s| s.id == "containerappjobs").unwrap().aliases.push("CAJ".into());
         assert_eq!(parse("[CDW_STEP: CAJ]", &c, &syn()), Some(Marker::Step("containerappjobs".into())));
+    }
+
+    #[test]
+    fn metadata_start_and_completion_are_distinct_markers() {
+        assert_eq!(parse("[CDW_STEP: DLHMetadata]", &cat(), &syn()),
+                   Some(Marker::Step("dlhmetadata".into())));
+        assert_eq!(parse("[CDW_STEP_DONE: DLHMetadata]", &cat(), &syn()),
+                   Some(Marker::StepDone("dlhmetadata".into())));
     }
 
     #[test]

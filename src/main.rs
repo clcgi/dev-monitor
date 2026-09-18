@@ -34,6 +34,7 @@ fn window_config(title: &str) -> dioxus::desktop::Config {
 }
 
 fn main() {
+    services::toolchain::configure_azure_cli();
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info");
     }

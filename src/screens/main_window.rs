@@ -373,16 +373,25 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                         // can be run without touching the dropdown -- and only
                         // on first selection, so a deliberate choice is not
                         // reset by clicking away and back.
-                        let first_choices: Vec<(String, String)> = meta
-                            .choices
-                            .iter()
-                            .filter_map(|c| c.values.first().map(|v| (c.flag.clone(), v.clone())))
-                            .collect();
+                        //
+                        // BUILT UP IN DECLARATION ORDER, not independently: a
+                        // choice that narrows by another must default WITHIN
+                        // that other's default, or the pair starts on a
+                        // combination the file does not hold. Which makes the
+                        // order the script declares its choices in meaningful
+                        // -- `--indicator` before `--case`.
+                        let mut first_choices: std::collections::HashMap<String, String> =
+                            std::collections::HashMap::new();
+                        for choice in meta.choices.iter() {
+                            if let Some(value) = choice.values_for(&first_choices).first() {
+                                first_choices.insert(choice.flag.clone(), value.clone());
+                            }
+                        }
                         let fresh = !s.scripts.contains_key(&meta.path);
                         let entry = s.entry(&meta.path);
                         if fresh {
                             entry.enabled_args = defaults;
-                            entry.chosen = first_choices.into_iter().collect();
+                            entry.chosen = first_choices;
                         }
                         s.selected_script = Some(meta.path.clone());
                         s.selected_meta = Some(meta);
@@ -462,7 +471,32 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     on_choose: move |(flag, value): (String, String)| {
                         let mut s = state.write();
                         let Some(path) = s.selected_script.clone() else { return };
-                        s.entry(&path).chosen.insert(flag, value);
+                        let choices = s
+                            .selected_meta
+                            .as_ref()
+                            .map(|m| m.choices.clone())
+                            .unwrap_or_default();
+                        let entry = s.entry(&path);
+                        entry.chosen.insert(flag.clone(), value);
+                        // ANYTHING THAT NARROWS BY THIS FLAG IS NOW SUSPECT.
+                        // Switching --indicator from RO to RW leaves --case
+                        // holding a document that has no RW copy; left alone it
+                        // stays on screen, looks chosen, and is refused by the
+                        // script after Run. Moved to the first value the new
+                        // selection does offer, or cleared when it offers none
+                        // -- command_args already omits an empty choice.
+                        for choice in choices.iter().filter(|c| c.depends_on == flag) {
+                            let allowed = choice.values_for(&entry.chosen);
+                            let current =
+                                entry.chosen.get(&choice.flag).cloned().unwrap_or_default();
+                            if allowed.contains(&current) {
+                                continue;
+                            }
+                            match allowed.first() {
+                                Some(first) => entry.chosen.insert(choice.flag.clone(), first.clone()),
+                                None => entry.chosen.remove(&choice.flag),
+                            };
+                        }
                     },
                     on_run: move |_| {
                         let s = state.read();
