@@ -180,7 +180,8 @@ pub fn parse_meta(
     meta
 }
 
-/// One `CDW_CHOICE` line: `--case @tools/fixtures/m.csv:source_filename  help`.
+/// One `CDW_CHOICE` line: `--case @tools/fixtures/m.csv:source_filename  help`,
+/// or an inline list, `--indicator RO|RW  help`.
 ///
 /// Returns None rather than an empty choice when the source is absent. A
 /// choice with nowhere to read from would render as a dropdown that can never
@@ -193,6 +194,28 @@ fn parse_choice(payload: &str, repo_root: &Path) -> Option<ScriptChoice> {
         return None;
     }
     let rest = rest.trim();
+    // INLINE VALUES, for a flag whose vocabulary is the script's own rather
+    // than a column of a file: `--indicator RO|RW` names the two copies a DMS
+    // document is delivered in. Read as a file spec it parses to nothing, the
+    // choice is dropped, and the run silently sends the script's default copy.
+    if !rest.starts_with('@') {
+        let (list, help) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let values: Vec<String> = list
+            .split('|')
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        if values.len() < 2 {
+            return None;
+        }
+        return Some(ScriptChoice {
+            flag: flag.to_string(),
+            source: String::new(),
+            column: String::new(),
+            help: help.trim().to_string(),
+            values,
+        });
+    }
     let spec = rest.strip_prefix('@')?;
     // rsplit, not split: a Windows-shaped path would contain a drive colon,
     // and the COLUMN is always the last segment.
@@ -238,11 +261,17 @@ fn read_column(path: &Path, column: &str) -> Vec<String> {
         return Vec::new();
     };
 
+    // DEDUPED, IN FILE ORDER: the corpus manifest carries a DMS document twice,
+    // once per copy, naming the same file. Listed twice the dropdown shows one
+    // document as two identical entries and neither says which copy it sends;
+    // the script runs both copies for one name, or takes --indicator to narrow.
+    let mut seen = std::collections::HashSet::new();
     lines
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| line.split(delimiter).nth(index))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+        .filter(|value| seen.insert(value.clone()))
         .collect()
 }
 
@@ -619,6 +648,40 @@ mod tests {
         assert_eq!(meta.args.len(), 1);
         assert_eq!(meta.args[0].flag, "--all");
         assert_eq!(meta.choices.len(), 1);
+    }
+
+    #[test]
+    fn a_document_delivered_as_two_copies_is_offered_once() {
+        // The manifest carries a DMS document twice, RO and RW, naming the same
+        // file. Listed twice the dropdown shows one document as two identical
+        // entries, and neither says which copy it would send.
+        let (root, path) = with_manifest(
+            "choice-copies",
+            "source_filename;file_type_indicator\nHEER.ZIP;RO\nHEER.ZIP;RW\nb.pdf;RO\n",
+        );
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices[0].values, vec!["HEER.ZIP", "b.pdf"]);
+    }
+
+    #[test]
+    fn a_choice_can_list_its_values_inline() {
+        // `--indicator RO|RW` has no file to read: the two copies are the
+        // script's own vocabulary. Ignored, the flag never reaches the picker
+        // and the run sends whichever copy the script defaults to.
+        let root = tempdir("choice-inline");
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let path = write(
+            &tools,
+            "corpus.py",
+            "# CDW_SCRIPT: category=Flows\n\
+             # CDW_CHOICE: --indicator RO|RW  Which copy to send\n",
+        );
+        let meta = parse_meta(&path, "tools/corpus.py", &root, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.choices.len(), 1);
+        assert_eq!(meta.choices[0].flag, "--indicator");
+        assert_eq!(meta.choices[0].values, vec!["RO", "RW"]);
+        assert_eq!(meta.choices[0].help, "Which copy to send");
     }
 
     #[test]
