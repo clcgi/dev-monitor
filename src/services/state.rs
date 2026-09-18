@@ -85,6 +85,10 @@ pub struct ScriptState {
     pub active_step: Option<StepId>,
     pub step_history: Vec<StepId>,
     pub step_started: Option<DateTime<Local>>,
+    /// Seconds already ATTRIBUTED to each stage. A stage the run is standing
+    /// on is not in here yet -- its clock is still `step_started` -- so a
+    /// reader wanting the number on screen adds the live elapsed to this.
+    pub step_seconds: HashMap<StepId, u64>,
     pub traces: BTreeMap<String, Vec<LogMsg>>,
     pub in_trace: Option<String>,
     pub start_time: Option<DateTime<Local>>,
@@ -94,6 +98,62 @@ pub struct ScriptState {
 impl ScriptState {
     pub fn has_started(&self) -> bool {
         self.start_time.is_some()
+    }
+
+    /// A stage was announced. Closes the one before it and starts this one.
+    ///
+    /// A STAGE IS TIMED UNTIL THE NEXT STAGE STARTS, not until its own DONE
+    /// marker. The two marker styles in the repository disagree about what
+    /// DONE means: `tools/cdw_workflows/flow.py` emits START and DONE together
+    /// because a stage is marked when its evidence is OBSERVED, while
+    /// `tools/run_against_dev.py` brackets real work with them. Timing to DONE
+    /// reads every corpus flow as eleven instant stages; timing to the next
+    /// START is the same number for the second style, because its next START
+    /// is the line after its DONE.
+    pub fn begin_step(&mut self, step: StepId, now: DateTime<Local>) {
+        // The same stage announced again is one visit, not two. Restamping
+        // would throw away everything spent on it before the repeat.
+        if self.active_step.as_ref() == Some(&step) {
+            return;
+        }
+        self.close_open_step(now);
+        self.active_step = Some(step);
+        self.step_started = Some(now);
+    }
+
+    /// A stage reported itself finished. The CURSOR does not move and the
+    /// clock does not stop -- see `begin_step` for why.
+    pub fn finish_step(&mut self, step: StepId) {
+        if !self.step_history.contains(&step) {
+            self.step_history.push(step);
+        }
+    }
+
+    /// The process ended, or was killed. Whatever the run was standing on gets
+    /// the time it actually spent there, and the cursor stays where it is.
+    pub fn stop_step_clock(&mut self, now: DateTime<Local>) {
+        self.close_open_step(now);
+    }
+
+    /// A new pass over the chain, or a new run: forget the previous one.
+    pub fn restart_steps(&mut self) {
+        self.active_step = None;
+        self.step_started = None;
+        self.step_history.clear();
+        self.step_seconds.clear();
+    }
+
+    /// Bank the open stage's elapsed seconds. ADDS, because a chain can come
+    /// back to a stage it already visited (neo_simulator marks APIM twice),
+    /// and one node can only show one number.
+    fn close_open_step(&mut self, now: DateTime<Local>) {
+        if let (Some(step), Some(started)) = (self.active_step.clone(), self.step_started) {
+            // Saturating at zero: a clock adjustment mid-run must not produce
+            // a stage that took minus thirty seconds.
+            let spent = now.signed_duration_since(started).num_seconds().max(0) as u64;
+            *self.step_seconds.entry(step).or_default() += spent;
+        }
+        self.step_started = None;
     }
 
     /// The whole command line: the toggles, then each choice as two argv
@@ -334,6 +394,104 @@ mod tests {
         }
         let order: Vec<&str> = state.scripts["x.py"].traces.keys().map(|s| s.as_str()).collect();
         assert_eq!(order, ["Alpha", "Middle", "Zeta"]);
+    }
+
+    // ------------------------------------------------------------ stage timing
+
+    fn at(base: DateTime<Local>, secs: i64) -> DateTime<Local> {
+        base + chrono::Duration::seconds(secs)
+    }
+
+    #[test]
+    fn a_stage_is_timed_until_the_next_stage_starts() {
+        let base = Local::now();
+        let mut run = ScriptState::default();
+        run.begin_step("neo".into(), base);
+        run.begin_step("landing".into(), at(base, 5));
+
+        assert_eq!(run.step_seconds.get("neo"), Some(&5));
+    }
+
+    #[test]
+    fn a_completion_marker_does_not_stop_the_clock() {
+        // tools/cdw_workflows/flow.py emits CDW_STEP and CDW_STEP_DONE for a
+        // stage in the same breath, because a stage is marked when its
+        // evidence is OBSERVED. Timing start->done would give every stage of
+        // every corpus flow 0s, which is worse than showing nothing.
+        let base = Local::now();
+        let mut run = ScriptState::default();
+        run.begin_step("neo".into(), base);
+        run.finish_step("neo".into());
+        run.begin_step("raw".into(), at(base, 7));
+
+        assert_eq!(run.step_seconds.get("neo"), Some(&7));
+        assert_eq!(run.step_history, vec!["neo".to_string()]);
+    }
+
+    #[test]
+    fn the_last_stage_is_closed_when_the_process_ends() {
+        let base = Local::now();
+        let mut run = ScriptState::default();
+        run.begin_step("curated".into(), base);
+        run.stop_step_clock(at(base, 3));
+
+        assert_eq!(run.step_seconds.get("curated"), Some(&3));
+        // The cursor STAYS: the node is still the one the run reached, and
+        // clearing it would redraw the whole strip as unvisited on exit.
+        assert_eq!(run.active_step.as_deref(), Some("curated"));
+        assert!(run.step_started.is_none());
+    }
+
+    #[test]
+    fn a_stage_entered_twice_accumulates_rather_than_restarting() {
+        // neo_simulator.py marks Apim twice in one run. Two visits to one node
+        // are two spells on it, and the node can only show one number.
+        let base = Local::now();
+        let mut run = ScriptState::default();
+        run.begin_step("apim".into(), base);
+        run.begin_step("landing".into(), at(base, 4));
+        run.begin_step("apim".into(), at(base, 10));
+        run.stop_step_clock(at(base, 16));
+
+        assert_eq!(run.step_seconds.get("apim"), Some(&10));
+        assert_eq!(run.step_seconds.get("landing"), Some(&6));
+    }
+
+    #[test]
+    fn re_announcing_the_running_stage_does_not_restart_its_clock() {
+        let base = Local::now();
+        let mut run = ScriptState::default();
+        run.begin_step("raw".into(), base);
+        run.begin_step("raw".into(), at(base, 5));
+        run.stop_step_clock(at(base, 9));
+
+        assert_eq!(run.step_seconds.get("raw"), Some(&9));
+    }
+
+    #[test]
+    fn a_new_pass_over_the_chain_forgets_the_previous_timings() {
+        // simulate_upload.py runs the chain twice. Carrying the first pass's
+        // seconds into the second reports a stage as slow that was not.
+        let base = Local::now();
+        let mut run = ScriptState::default();
+        run.begin_step("neo".into(), base);
+        run.begin_step("raw".into(), at(base, 8));
+        run.restart_steps();
+
+        assert!(run.step_seconds.is_empty());
+        assert!(run.active_step.is_none());
+        assert!(run.step_started.is_none());
+        assert!(run.step_history.is_empty());
+    }
+
+    #[test]
+    fn a_clock_the_wall_ran_backwards_on_is_not_a_negative_stage() {
+        let base = Local::now();
+        let mut run = ScriptState::default();
+        run.begin_step("neo".into(), base);
+        run.stop_step_clock(at(base, -30));
+
+        assert_eq!(run.step_seconds.get("neo"), Some(&0));
     }
 
     #[test]

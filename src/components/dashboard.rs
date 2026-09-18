@@ -221,6 +221,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                     step_elapsed_s: run.step_started.map(|t| {
                                         Local::now().signed_duration_since(t).num_seconds().max(0) as u64
                                     }),
+                                    step_seconds: run.step_seconds.clone(),
                                     active_step: run.active_step.clone(),
                                     step_history: run.step_history.clone(),
                                     is_running,

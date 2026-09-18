@@ -75,9 +75,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                 entry.end_time = None;
                                 entry.logs.clear();
                                 entry.verdicts.clear();
-                                entry.active_step = None;
-                                entry.step_history.clear();
-                                entry.step_started = None;
+                                entry.restart_steps();
                                 entry.traces.clear();
                                 entry.in_trace = None;
                             }
@@ -106,28 +104,16 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                 match markers::parse(&log_msg.content, &catalog, &syntax) {
                                                     // A new pass over the chain.
                                                     Some(Marker::Run(_)) => {
-                                                        let mut s = state.write();
-                                                        let e = s.entry(&script);
-                                                        e.active_step = None;
-                                                        e.step_started = None;
-                                                        e.step_history.clear();
+                                                        state.write().entry(&script).restart_steps();
                                                     }
                                                     Some(Marker::Step(step)) => {
-                                                        let mut s = state.write();
-                                                        let e = s.entry(&script);
-                                                        // Restamped only on a CHANGE of stage.
-                                                        if e.active_step.as_ref() != Some(&step) {
-                                                            e.step_started = Some(Local::now());
-                                                        }
-                                                        e.active_step = Some(step.clone());
+                                                        // Restamped only on a CHANGE of stage, and the
+                                                        // stage it leaves is banked there.
+                                                        state.write().entry(&script).begin_step(step, Local::now());
                                                     }
                                                     // Completion does NOT move the cursor.
                                                     Some(Marker::StepDone(step)) => {
-                                                        let mut s = state.write();
-                                                        let e = s.entry(&script);
-                                                        if !e.step_history.contains(&step) {
-                                                            e.step_history.push(step);
-                                                        }
+                                                        state.write().entry(&script).finish_step(step);
                                                     }
                                                     // A verdict the script reached about ITSELF. Kept alongside the exit code.
                                                     Some(Marker::TraceBegin(component)) => {
@@ -175,7 +161,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                         });
                                                         e.status = ScriptStatus::Cancelled;
                                                         e.end_time = Some(Local::now());
-                                                        e.step_started = None;
+                                                        e.stop_step_clock(Local::now());
                                                     }
                                                     break;
                                                 }
@@ -208,8 +194,10 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                                 let started = {
                                                     let e = s.entry(&script);
                                                     e.end_time = Some(end_time);
-                                                    // The stage clock stops with the process.
-                                                    e.step_started = None;
+                                                    // The stage clock stops with the process, and
+                                                    // the stage it stopped on keeps the seconds it
+                                                    // actually spent there.
+                                                    e.stop_step_clock(end_time);
                                                     e.status = final_status.clone();
                                                     e.logs.push(LogMsg {
                                                         timestamp: Local::now(),
@@ -255,7 +243,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                                 let e = s.entry(&path);
                                 e.status = ScriptStatus::Cancelled;
                                 e.end_time = Some(Local::now());
-                                e.step_started = None;
+                                e.stop_step_clock(Local::now());
                             }
                         },
                         None => break,
