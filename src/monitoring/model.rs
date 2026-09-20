@@ -90,9 +90,20 @@ pub struct Doc {
 }
 
 impl Doc {
-    /// The identifier an operator types: the business key when there is one.
+    /// The identifier an operator types: register number, then business key, then documentId.
     pub fn display_key(&self) -> &str {
-        if self.business_key.is_empty() { &self.document_id } else { &self.business_key }
+        if let Some(Value::String(s)) = self.attributes.get("reference.uniqueDocNumber") {
+            if !s.is_empty() {
+                return s;
+            }
+        }
+        if !self.business_key.is_empty() {
+            &self.business_key
+        } else if !self.source_document_id.is_empty() {
+            &self.source_document_id
+        } else {
+            &self.document_id
+        }
     }
 
     pub fn is_member(&self) -> bool {
@@ -164,6 +175,10 @@ pub struct LogRow {
     pub source: String,
     pub level: String,
     pub category: String,
+    /// Leading EventName from the message (`RoutingCompleted`, `ExtractionJobDone`).
+    /// Empty on SDK chatter and on probes that predate the field.
+    #[serde(default)]
+    pub event: String,
     pub message: String,
     pub replica: Option<String>,
 }

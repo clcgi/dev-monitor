@@ -657,8 +657,9 @@ fn logs(view: &TraceView, open_group: Option<GroupId>, on_group: EventHandler<Gr
                                                 LogKind::Info => TEXT_SOFT,
                                             };
                                             rsx! {
-                                                div { key: "{i}", style: "display:grid;grid-template-columns:128px 1fr;gap:12px;padding:8px 0;border-top:1px solid {ROW_RULE}",
+                                                div { key: "{i}", style: "display:grid;grid-template-columns:128px minmax(120px,180px) 1fr;gap:12px;padding:8px 0;border-top:1px solid {ROW_RULE};align-items:start",
                                                     span { style: "{mono(500, 11.5)}color:{DIM}", "{e.at}" }
+                                                    span { style: "{sans(600, 11.5)}color:{TEXT};overflow-wrap:anywhere", "{e.event}" }
                                                     span { style: "{mono(400, 12.0)}line-height:1.7;color:{text_fg};overflow-wrap:anywhere", "{e.text}" }
                                                 }
                                             }
