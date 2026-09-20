@@ -256,6 +256,8 @@ pub struct Tree {
 pub struct LogEntry {
     pub at: String,
     pub kind: LogKind,
+    /// Process-log EventName when this row came from App Insights / the Job.
+    pub event: String,
     pub text: String,
 }
 
@@ -647,6 +649,11 @@ fn header(cx: &Ctx, zone_at: Option<&str>) -> Header {
         matched_on: cx.t.matched_on.clone().unwrap_or_else(|| "query".into()),
         facts: vec![
             fact("DOCUMENTID", r.document_id.clone()),
+            fact("DOCUMENTNUMBER", {
+                let n = r.attribute("reference.uniqueDocNumber").unwrap_or_default();
+                if n.is_empty() { f::or_dash(Some(r.source_document_id.clone())) } else { n }
+            }),
+            fact("CORRELATIONID", f::or_dash(Some(r.correlation_id.clone()))),
             fact("REVISION", f::or_dash(Some(r.revision_id.clone()))),
             fact("SOURCE", f::or_dash(Some(r.source_system.clone()))),
             fact("RECEIVED", received.map(f::full).unwrap_or_else(|| DASH.into())),
@@ -1761,7 +1768,30 @@ fn group_of_event(a: &AuditRow) -> GroupId {
     }
 }
 
+fn group_of_spine(event: &str) -> Option<GroupId> {
+    Some(match event {
+        "DocumentRegistered" | "DocumentUploadedSmall" | "ReconcileCompleted"
+        | "ReconcileTransientFailure" | "ReconcilePermanentFailure"
+        | "CorrelationIdSynthesised" | "DuplicateArrival" | "ReuploadAccepted" => GroupId::Admitted,
+        "MetadataPending" | "MetadataKeyIncomplete" | "PendingStillUnresolved"
+        | "PendingNearLifecycleDelete" | "PendingExpiredWithNoBytes" => GroupId::Reference,
+        "PromotionDecision" | "PromotionRefused" | "RoutingCompleted" | "RoutingFailed"
+        | "RoutingQuarantined" | "CuratedSkipped" | "CuratedPlaced" | "RawPathFallback"
+        | "RawPathUnbuildable" => GroupId::Promotion,
+        "ExtractionJobDone" | "ExtractionTiming" | "ExtractionJobFailed"
+        | "ArchiveExtractionParked" | "ExtractionBreach" | "PackageWithoutMain"
+        | "PackageWithSeveralMains" | "ExtractionAlreadyComplete" | "ExtractionSkipped" => {
+            GroupId::Extraction
+        }
+        "SweepCompleted" | "LandingResidueDetected" | "SweepRecordSkipped" => GroupId::Lifecycle,
+        _ => return None,
+    })
+}
+
 fn group_of_log(row: &LogRow) -> GroupId {
+    if let Some(id) = group_of_spine(&row.event) {
+        return id;
+    }
     if row.source == "job" {
         return GroupId::Extraction;
     }
@@ -1829,7 +1859,7 @@ fn log_groups(cx: &Ctx) -> (String, Vec<LogGroup>) {
         let at = f::parse(&a.occurred_at);
         buckets.entry(group_of_event(a)).or_default().push((
             a.occurred_at.clone(),
-            LogEntry { at: at.map(f::day_clock).unwrap_or_else(|| DASH.into()), kind: LogKind::Audit, text: audit_text(a) },
+            LogEntry { at: at.map(f::day_clock).unwrap_or_else(|| DASH.into()), kind: LogKind::Audit, event: a.event_type.clone(), text: audit_text(a) },
         ));
     }
     for row in &logs.entries {
@@ -1837,12 +1867,17 @@ fn log_groups(cx: &Ctx) -> (String, Vec<LogGroup>) {
         let mut text = row.message.clone();
         if let Some(replica) = &row.replica {
             text = format!("[{replica}] {text}");
-        } else if !row.category.is_empty() {
+        } else if row.event.is_empty() && !row.category.is_empty() {
             text = format!("[{}] {text}", row.category);
         }
         buckets.entry(group_of_log(row)).or_default().push((
             row.at.clone(),
-            LogEntry { at: at.map(f::day_clock).unwrap_or_else(|| DASH.into()), kind: log_kind(&row.level), text },
+            LogEntry {
+                at: at.map(f::day_clock).unwrap_or_else(|| DASH.into()),
+                kind: log_kind(&row.level),
+                event: row.event.clone(),
+                text,
+            },
         ));
     }
 
@@ -1889,7 +1924,7 @@ fn log_groups(cx: &Ctx) -> (String, Vec<LogGroup>) {
                 as_of: DASH.into(),
                 lag: lag_text.into(),
                 quiet: true,
-                entries: vec![LogEntry { at: DASH.into(), kind: LogKind::None, text: text.into() }],
+                entries: vec![LogEntry { at: DASH.into(), kind: LogKind::None, event: String::new(), text: text.into() }],
             });
         } else {
             groups.push(LogGroup { id, label, as_of: as_of.clone(), lag: lag_label.clone(), quiet: !logs.available, entries });
@@ -1978,7 +2013,7 @@ fn gaps(cx: &Ctx, steps: &[Step], tree: Option<&Tree>) -> Vec<Gap> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::monitoring::model::{Env, Expected, Location, Logs, RefPointer, SourceCfg};
+    use crate::monitoring::model::{Env, Expected, Location, LogRow, Logs, RefPointer, SourceCfg};
     use serde_json::json;
 
     const NOW: &str = "2026-08-14T09:04:11Z";
@@ -2291,5 +2326,57 @@ mod tests {
         let mut t = parked();
         t.root = None;
         assert!(build(&t, now()).is_none());
+    }
+
+    fn log_row(event: &str, category: &str, message: &str) -> LogRow {
+        LogRow {
+            at: "2026-08-11T04:12:08Z".into(),
+            source: "functions".into(),
+            level: "Information".into(),
+            category: category.into(),
+            event: event.into(),
+            message: message.into(),
+            replica: None,
+        }
+    }
+
+    #[test]
+    fn process_log_events_group_onto_the_spine_even_when_the_function_name_is_unknown() {
+        let mut t = parked();
+        t.logs.entries = vec![
+            log_row("DocumentRegistered", "unknown", "DocumentRegistered | correlationId=c1 documentId=01M00E8JM7QK4V2C1H9YB3"),
+            log_row("MetadataPending", "unknown", "MetadataPending | correlationId=c1 documentNumber=001.01000.000100-fb001"),
+            log_row("RoutingCompleted", "unknown", "RoutingCompleted | correlationId=c1 curated=placed:Official_main"),
+            log_row("ExtractionJobDone", "unknown", "ExtractionJobDone | correlationId=c1"),
+        ];
+        t.logs.entries.last_mut().unwrap().source = "job".into();
+        let v = build(&t, now()).unwrap();
+        let texts = |id| {
+            v.groups.iter().find(|g| g.id == id).unwrap().entries.iter().map(|e| e.event.as_str()).collect::<Vec<_>>()
+        };
+        assert!(texts(GroupId::Admitted).contains(&"DocumentRegistered"));
+        assert!(texts(GroupId::Reference).contains(&"MetadataPending"));
+        assert!(texts(GroupId::Promotion).contains(&"RoutingCompleted"));
+        assert!(texts(GroupId::Extraction).contains(&"ExtractionJobDone"));
+    }
+
+    #[test]
+    fn the_header_prefers_the_register_document_number() {
+        let mut t = parked();
+        t.root.as_mut().unwrap().attributes.insert(
+            "reference.uniqueDocNumber".into(),
+            json!("001.17013.000001-as001"),
+        );
+        t.root.as_mut().unwrap().correlation_id = "corr-9".into();
+        let v = build(&t, now()).unwrap();
+        assert_eq!(v.header.key, "001.17013.000001-as001");
+        assert_eq!(
+            v.header.facts.iter().find(|f| f.label == "DOCUMENTNUMBER").map(|f| f.value.as_str()),
+            Some("001.17013.000001-as001")
+        );
+        assert_eq!(
+            v.header.facts.iter().find(|f| f.label == "CORRELATIONID").map(|f| f.value.as_str()),
+            Some("corr-9")
+        );
     }
 }
