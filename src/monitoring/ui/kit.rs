@@ -138,6 +138,47 @@ pub fn ActionButton(label: String, icon: &'static str, primary: bool, onclick: E
     }
 }
 
+/// Puts one string on the clipboard; the webview has no synchronous API for it.
+#[component]
+pub fn CopyButton(text: String, label: String, title: String) -> Element {
+    let mut copied = use_signal(|| false);
+    let style = format!(
+        "display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:1px solid {DASH};border-radius:7px;background:{CARD};color:{TEXT_SOFT};cursor:pointer;flex-shrink:0;{}",
+        sans(600, 10.5)
+    );
+    let shown = if copied() { "copied".to_string() } else { label };
+    let icon: &'static str = if copied() { "check" } else { "copy" };
+    rsx! {
+        button {
+            r#type: "button",
+            title: "{title}",
+            style: "{style}",
+            onclick: move |e: Event<MouseData>| {
+                e.stop_propagation();
+                copy_to_clipboard(&text);
+                copied.set(true);
+            },
+            Icon { name: icon, size: 13.0, color: TEXT_SOFT.to_string() }
+            "{shown}"
+        }
+    }
+}
+
+/// execCommand is the fallback: the desktop webview refuses the async clipboard API
+/// on a page served from a custom protocol.
+fn copy_to_clipboard(text: &str) {
+    let payload = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string());
+    let _ = dioxus::document::eval(&format!(
+        "const text = {payload};\
+         if (navigator.clipboard) {{ navigator.clipboard.writeText(text).catch(() => {{}}); }}\
+         const area = document.createElement('textarea');\
+         area.value = text; area.style.position = 'fixed'; area.style.opacity = '0';\
+         document.body.appendChild(area); area.select();\
+         try {{ document.execCommand('copy'); }} catch (e) {{}}\
+         document.body.removeChild(area);"
+    ));
+}
+
 /// Table header row over a CSS grid, shared by every fleet table.
 #[component]
 pub fn GridHead(

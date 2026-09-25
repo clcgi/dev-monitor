@@ -13,6 +13,9 @@ pub enum Request {
     Trace(String),
     DeadLetters,
     Timing,
+    Quarantine,
+    /// Copy one object out of a zone into a local directory, under `name` when it has one.
+    Fetch { container: String, path: String, destination: String, name: String },
 }
 
 impl Request {
@@ -22,6 +25,10 @@ impl Request {
             Request::Trace(q) => vec!["trace".into(), q.clone()],
             Request::DeadLetters => vec!["deadletters".into()],
             Request::Timing => vec!["timing".into()],
+            Request::Quarantine => vec!["quarantine".into()],
+            Request::Fetch { container, path, destination, name } => {
+                vec!["fetch".into(), container.clone(), path.clone(), destination.clone(), name.clone()]
+            }
         }
     }
 }
@@ -71,31 +78,62 @@ fn login_commands_for(env: &str, home: Option<&std::path::Path>) -> String {
     if std::path::Path::new("/opt/homebrew/bin/az").is_file() {
         lines.push("export PATH='/opt/homebrew/bin':\"$PATH\"".to_string());
     }
-    if let Some(dir) = home.and_then(|home| azure_config_dir(env, home)) {
-        lines.push(format!("export AZURE_CONFIG_DIR={}", quote(&dir.to_string_lossy())));
-    }
+    // A plain login is what the app reads first-class; the per-environment profile is
+    // offered second, for whoever keeps one, and is never required.
     lines.push("az login".to_string());
     lines.push(format!("az account set --subscription <the {env} subscription>"));
+    if let Some(dir) = home.and_then(|home| azure_config_dir(env, home)) {
+        lines.push(format!("# or, to refresh your {env} profile instead:", env = env.to_uppercase()));
+        lines.push(format!("AZURE_CONFIG_DIR={} az login", quote(&dir.to_string_lossy())));
+    }
     lines.join("\n")
 }
 
 pub fn command_line(env: &str, request: &Request) -> String {
+    command_line_for(env, request, dirs::home_dir().as_deref())
+}
+
+fn command_line_for(env: &str, request: &Request, home: Option<&std::path::Path>) -> String {
     // Relative: the probe runs from CentralDocumentWarehouse, so no absolute (or Windows-specific) path is needed.
     let probe = std::env::var_os(PROBE_OVERRIDE)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("tools/monitor_probe.py"));
     let args: String = request.args().iter().map(|a| format!(" {}", quote(a))).collect();
-    let profile = dirs::home_dir()
-        .and_then(|home| azure_config_dir(env, &home))
-        .map(|dir| format!("export AZURE_CONFIG_DIR={}; ", quote(&dir.to_string_lossy())))
-        .unwrap_or_default();
-    // 00-variables prints progress on stdout; it must not reach the JSON reader.
-    format!(
-        "{profile}export CDW_ENV={}; source deploy/00-variables.sh >/dev/null 2>&1 && exec .venv/bin/python {}{}",
-        quote(env),
+    // 00-variables prints progress on stdout, which must not reach the JSON reader — but its
+    // stderr is kept: sourced, it exits the shell on a bad login or subscription, and silencing
+    // that left "the probe exited without a result" as the only symptom.
+    let attempt = format!(
+        "source deploy/00-variables.sh >/dev/null && exec .venv/bin/python {}{}",
         quote(&probe.to_string_lossy()),
         args
-    )
+    );
+    let default_profile = format!("( {attempt} )");
+    match home.and_then(|home| azure_config_dir(env, home)) {
+        // The per-environment profile is a PREFERENCE, never a requirement: it is what
+        // azsbm_login writes and this app cannot inherit, but a plain `az login` must keep
+        // working. Each try is a subshell, because 00-variables is sourced and its exit
+        // would otherwise end the whole attempt chain with it.
+        Some(dir) => format!(
+            "export CDW_ENV={}; ( export AZURE_CONFIG_DIR={}; {attempt} ) || {default_profile}",
+            quote(env),
+            quote(&dir.to_string_lossy()),
+        ),
+        None => format!("export CDW_ENV={}; {default_profile}", quote(env)),
+    }
+}
+
+/// Which Azure CLI logins were tried, since every one of them failing reads as the
+/// platform being broken rather than as a login to refresh.
+fn profile_note(env: &str) -> String {
+    let env_name = env.to_uppercase();
+    match dirs::home_dir().and_then(|home| azure_config_dir(env, &home)) {
+        Some(dir) => format!(
+            " Tried the {} profile and then your default `az login`; neither could read {env_name}. \
+             `az login` refreshes the default one.",
+            dir.display()
+        ),
+        None => format!(" This used your default `az login`, whose active subscription must be {env_name}'s."),
+    }
 }
 
 pub async fn run<T: DeserializeOwned>(env: &str, request: Request) -> Probe<T> {
@@ -124,7 +162,14 @@ pub async fn run<T: DeserializeOwned>(env: &str, request: Request) -> Probe<T> {
         Ok(Err(e)) => return Probe::Error { message: format!("Could not start the probe: {e}") },
         Ok(Ok(out)) => out,
     };
-    let result = parse(&String::from_utf8_lossy(&output.stdout), &String::from_utf8_lossy(&output.stderr));
+    let mut result = parse(&String::from_utf8_lossy(&output.stdout), &String::from_utf8_lossy(&output.stderr));
+    // Nothing on stdout means the environment script exited before the probe ran, which is
+    // almost always the profile it ran with rather than anything about the environment.
+    if let Probe::Error { message } = &result {
+        let expired = ["AADSTS", "az login", "refresh token"].iter().any(|needle| message.contains(needle));
+        let note = format!("{message}{}", profile_note(env));
+        result = if expired { Probe::Auth { message: note } } else { Probe::Error { message: note } };
+    }
     let status = match &result {
         Probe::Ok { .. } => "ok",
         Probe::Auth { .. } => "auth",
@@ -169,6 +214,11 @@ fn drop_nulls(value: &mut serde_json::Value) {
     }
 }
 
+/// Where a downloaded document is saved: the operator's own Downloads folder.
+pub fn download_dir() -> Option<PathBuf> {
+    dirs::download_dir().or_else(dirs::home_dir).filter(|d| d.is_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +245,27 @@ mod tests {
             }
             other => panic!("expected ok, got {other:?}"),
         }
+    }
+
+    /// CDW_PROBE_SAMPLES=<dir with quarantine.json> cargo test -- --ignored quarantine
+    #[test]
+    #[ignore]
+    fn a_recorded_quarantine_answer_parses_and_derives_its_rows() {
+        use crate::monitoring::model::Quarantine;
+        let dir = std::path::PathBuf::from(std::env::var("CDW_PROBE_SAMPLES").expect("CDW_PROBE_SAMPLES"));
+        let recorded = std::fs::read_to_string(dir.join("quarantine.json")).expect("quarantine.json");
+        let Probe::Ok { data } = parse::<Quarantine>(&recorded, "") else { panic!("not ok: {:?}", parse::<Quarantine>(&recorded, "")) };
+        let (kpis, rows) = crate::monitoring::fleet_view::quarantine(&data, chrono::Utc::now());
+        eprintln!("container {} · {} docs · {} objects · {} rows", data.container, data.docs.len(), data.blobs.len(), rows.len());
+        for k in &kpis {
+            eprintln!("  KPI {}: {} {}", k.label, k.value, k.unit);
+        }
+        for r in &rows {
+            eprintln!("  {} | {} | moved {} | {} | {} | {}", r.key, r.reason, r.moved, r.held, r.size, r.address);
+            eprintln!("     why: {}\n     get: {}", r.why, r.download);
+        }
+        assert!(rows.len() >= data.docs.len(), "every quarantined document has a row");
+        assert!(rows.iter().all(|r| r.address.starts_with(&data.container)), "every row names where its bytes are");
     }
 
     #[test]
@@ -237,6 +308,44 @@ mod tests {
     }
 
     #[test]
+    fn the_environment_script_keeps_its_stderr_so_a_failure_to_start_says_why() {
+        let line = command_line("dev", &Request::Overview);
+        assert!(line.contains("source deploy/00-variables.sh >/dev/null &&"), "{line}");
+        assert!(!line.contains("2>&1"), "{line}");
+    }
+
+    #[test]
+    fn a_plain_az_login_is_used_when_the_environment_has_no_profile_of_its_own() {
+        let home = scratch_home("no-profile");
+        let line = command_line_for("dev", &Request::Overview, Some(&home));
+        assert!(!line.contains("AZURE_CONFIG_DIR"), "{line}");
+        assert!(line.contains("export CDW_ENV='dev'; ( source deploy/00-variables.sh"), "{line}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_environment_profile_is_preferred_but_a_plain_az_login_still_answers() {
+        let home = scratch_home("prefer-then-fall-back");
+        std::fs::create_dir_all(home.join(".azure/sbm-DEV")).unwrap();
+        let line = command_line_for("dev", &Request::Overview, Some(&home));
+        let profile = home.join(".azure/sbm-DEV").to_string_lossy().to_string();
+        // The profile is tried first...
+        assert!(line.contains(&format!("( export AZURE_CONFIG_DIR='{profile}'; source deploy")), "{line}");
+        // ...and a stale one falls through to the default profile instead of failing the app.
+        assert!(line.contains(") || ( source deploy/00-variables.sh"), "{line}");
+        // Each try is its own subshell: a sourced exit must not take the fallback with it.
+        assert_eq!(line.matches("source deploy/00-variables.sh").count(), 2, "{line}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_failure_before_the_probe_ran_names_the_profile_it_used() {
+        let note = profile_note("dev");
+        assert!(note.contains("`az login`"), "{note}");
+        assert!(note.contains("DEV"), "{note}");
+    }
+
+    #[test]
     fn no_json_surfaces_stderr_rather_than_nothing() {
         match parse::<Overview>("", "Traceback\nImportError: azure") {
             Probe::Error { message } => assert!(message.contains("ImportError")),
@@ -276,14 +385,37 @@ mod tests {
     }
 
     #[test]
+    fn the_login_help_offers_a_plain_login_first() {
+        let home = scratch_home("login-help");
+        std::fs::create_dir_all(home.join(".azure/sbm-DEV")).unwrap();
+        let help = login_commands_for("dev", Some(&home));
+        let plain = help.find("az login").expect("a plain login");
+        assert!(plain < help.find("AZURE_CONFIG_DIR").expect("the profile alternative"), "{help}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn a_windows_verbatim_prefix_is_dropped() {
         assert_eq!(without_verbatim_prefix(PathBuf::from(r"\\?\C:\Work\CDW")), PathBuf::from(r"C:\Work\CDW"));
         assert_eq!(without_verbatim_prefix(PathBuf::from("/Users/x/CDW")), PathBuf::from("/Users/x/CDW"));
     }
 
     #[test]
+    fn a_download_names_the_object_and_where_to_put_it() {
+        let line = command_line("dev", &Request::Fetch {
+            container: "quarantine".into(),
+            path: "D1/v1/g1".into(),
+            destination: "/Users/x/Downloads".into(),
+            name: "inv mismatch.pdf".into(),
+        });
+        assert!(line.contains(" 'fetch' 'quarantine' 'D1/v1/g1' '/Users/x/Downloads' 'inv mismatch.pdf'"), "{line}");
+    }
+
+    #[test]
     fn query_is_quoted_so_it_cannot_break_out_of_the_shell() {
         let line = command_line("dev", &Request::Trace("a'; rm -rf /".into()));
-        assert!(line.ends_with(r#" 'trace' 'a'\''; rm -rf /'"#), "{line}");
+        assert!(line.contains(r#" 'trace' 'a'\''; rm -rf /'"#), "{line}");
+        // Quoted in every attempt, not only the first.
+        assert_eq!(line.matches(r#"'a'\''; rm -rf /'"#).count(), line.matches("monitor_probe.py").count(), "{line}");
     }
 }

@@ -313,6 +313,34 @@ pub struct DeadLetters {
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase", default)]
+pub struct Quarantine {
+    pub env: Env,
+    pub checked_at: String,
+    /// The quarantine container this environment holds its exceptions in.
+    pub container: String,
+    /// Catalog rows on `Quarantined`.
+    pub docs: Vec<Doc>,
+    /// Every event that records a move into quarantine, oldest first.
+    pub audit: Vec<AuditRow>,
+    /// What the container holds, listed rather than looked up, so an object
+    /// whose catalog row is missing is still reported.
+    pub blobs: Vec<BlobCheck>,
+    pub warnings: Vec<String>,
+}
+
+/// One object copied out of an exception zone onto this machine.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Fetched {
+    pub container: String,
+    pub path: String,
+    /// Where it landed, which is what the screen tells the operator.
+    pub file: String,
+    pub bytes: u64,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Timing {
     pub env: Env,
     pub checked_at: String,
@@ -365,6 +393,25 @@ mod tests {
         assert_eq!(t.source.as_ref().unwrap().pending_max_days, Some(5));
         assert_eq!((t.reference.as_ref().unwrap().generation, t.reference.as_ref().unwrap().row_count), (Some(2), Some(9)));
         assert_eq!(t.matched_on.as_deref(), Some("businessKey"));
+    }
+
+    #[test]
+    fn a_quarantine_answer_arrives_with_every_key_the_probe_writes() {
+        let json = r#"{"status":"ok","data":{"env":{"storeAccount":"store1"},"checkedAt":"t","container":"quarantine",
+            "docs":[{"documentId":"D","revisionId":"v1","fileGuid":"g","state":"Quarantined","fileName":"inv.pdf",
+                     "quarantineReason":"PROJECT_ID_MISMATCH","sizeBytes":60}],
+            "audit":[{"id":"i","documentId":"D","eventType":"UploadQuarantined","occurredAt":"t","correlationId":"c",
+                      "detail":{"reason":"PROJECT_ID_MISMATCH","zone":"quarantine","targetPath":"D/v1/g",
+                                "sourceContainer":"backfill-dms","sourcePath":"campaign/inv.pdf"}}],
+            "blobs":[{"zone":"quarantine","container":"quarantine","containerExists":true,"path":"D/v1/g",
+                      "exists":true,"size":60,"lastModified":"t","error":null}],
+            "warnings":[]}}"#;
+        let Probe::Ok { data: q } = serde_json::from_str::<Probe<Quarantine>>(json).unwrap() else { panic!("not ok") };
+        assert_eq!(q.container, "quarantine");
+        assert_eq!(q.env.store_account, "store1");
+        assert_eq!(q.docs[0].quarantine_reason.as_deref(), Some("PROJECT_ID_MISMATCH"));
+        assert_eq!(q.audit[0].detail["targetPath"], "D/v1/g");
+        assert_eq!(q.blobs[0].size, Some(60));
     }
 
     #[test]

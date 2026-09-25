@@ -5,7 +5,7 @@ mod shell;
 mod trace;
 
 use crate::monitoring::fleet_view;
-use crate::monitoring::model::{DeadLetters, Overview, Probe, Timing, Trace};
+use crate::monitoring::model::{DeadLetters, Overview, Probe, Quarantine, Timing, Trace};
 use crate::monitoring::probe::{self, Request};
 use crate::monitoring::tokens::{BG, KEYFRAMES, SANS, TEXT};
 use crate::monitoring::trace_view::{self, GroupId, StepId};
@@ -21,6 +21,7 @@ pub enum Screen {
     Trace,
     Queue,
     Stuck,
+    Quarantine,
     Dead,
     Refs,
     Timing,
@@ -53,6 +54,7 @@ fn location_label(l: &Location, env_name: &str) -> String {
         Screen::Trace => l.traced.clone(),
         Screen::Queue => "Parked queue".into(),
         Screen::Stuck => "Stuck extractions".into(),
+        Screen::Quarantine => "Quarantine".into(),
         Screen::Dead => "Dead-letter watch".into(),
         Screen::Refs => "Reference freshness".into(),
         Screen::Timing => "Step timing".into(),
@@ -136,6 +138,10 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
     let overview = use_signal(Fetch::<Overview>::default);
     let trace = use_signal(Fetch::<Trace>::default);
     let dead = use_signal(Fetch::<DeadLetters>::default);
+    let quarantine = use_signal(Fetch::<Quarantine>::default);
+    // A download is per-object and out of band: the screen keeps showing what it read.
+    let mut downloading = use_signal(|| Option::<String>::None);
+    let mut downloaded = use_signal(|| Option::<Result<String, String>>::None);
     let timing = use_signal(Fetch::<Timing>::default);
     let mut open_step = use_signal(|| Option::<StepId>::None);
     let mut open_group = use_signal(|| Option::<GroupId>::None);
@@ -159,6 +165,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         reset(trace);
         reset(dead);
         reset(timing);
+        reset(quarantine);
         fetch(overview, e, Request::Overview);
         let q = traced.peek().clone();
         if !q.is_empty() {
@@ -167,6 +174,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         match *screen.peek() {
             Screen::Dead => fetch(dead, e, Request::DeadLetters),
             Screen::Timing => fetch(timing, e, Request::Timing),
+            Screen::Quarantine => fetch(quarantine, e, Request::Quarantine),
             _ => {}
         }
     });
@@ -220,6 +228,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         match s {
             Screen::Dead if dead.peek().result.is_none() && !dead.peek().pending => fetch(dead, e, Request::DeadLetters),
             Screen::Timing if timing.peek().result.is_none() && !timing.peek().pending => fetch(timing, e, Request::Timing),
+            Screen::Quarantine if quarantine.peek().result.is_none() && !quarantine.peek().pending => fetch(quarantine, e, Request::Quarantine),
             _ => {}
         }
     });
@@ -244,6 +253,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         match to.screen {
             Screen::Dead if dead.peek().result.is_none() && !dead.peek().pending => fetch(dead, e, Request::DeadLetters),
             Screen::Timing if timing.peek().result.is_none() && !timing.peek().pending => fetch(timing, e, Request::Timing),
+            Screen::Quarantine if quarantine.peek().result.is_none() && !quarantine.peek().pending => fetch(quarantine, e, Request::Quarantine),
             _ => {}
         }
     });
@@ -260,6 +270,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
             }
             Screen::Dead => fetch(dead, e, Request::DeadLetters),
             Screen::Timing => fetch(timing, e, Request::Timing),
+            Screen::Quarantine => fetch(quarantine, e, Request::Quarantine),
             _ => {}
         }
     });
@@ -284,6 +295,11 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         }
         _ => None,
     };
+    // Known once the screen has been read, like the dead-letter count.
+    let quarantined = match &quarantine.read().result {
+        Some(Probe::Ok { data }) => Some(data.docs.len()),
+        _ => None,
+    };
     let nav = vec![
         NavItem { screen: Screen::Home, icon: "database", label: format!("{env_name} today"), badge: None, hot: false },
         NavItem { screen: Screen::Trace, icon: "magnifying-glass", label: "Document trace".into(), badge: None, hot: false },
@@ -302,6 +318,13 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
             hot: stalled.is_some_and(|n| n > 0),
         },
         NavItem {
+            screen: Screen::Quarantine,
+            icon: "shield-warning",
+            label: "Quarantine".into(),
+            badge: quarantined.map(|n| n.to_string()),
+            hot: quarantined.is_some_and(|n| n > 0),
+        },
+        NavItem {
             screen: Screen::Dead,
             icon: "trash",
             label: "Dead-letter watch".into(),
@@ -318,7 +341,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         NavItem { screen: Screen::Timing, icon: "timer", label: "Step timing".into(), badge: None, hot: false },
     ];
 
-    let any_pending = ov.pending || trace.read().pending || dead.read().pending || timing.read().pending;
+    let any_pending = ov.pending || trace.read().pending || dead.read().pending || timing.read().pending || quarantine.read().pending;
     let stage_note = if any_pending {
         format!("Reading {env_name} through the Azure CLI, read-only…")
     } else if let Some(o) = &ov_data {
@@ -356,6 +379,7 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         Screen::Trace => "Document trace".to_string(),
         Screen::Queue => "Parked queue".to_string(),
         Screen::Stuck => "Stuck extractions".to_string(),
+        Screen::Quarantine => "Quarantine".to_string(),
         Screen::Dead => "Dead-letter watch".to_string(),
         Screen::Refs => "Reference freshness".to_string(),
         Screen::Timing => "Step timing".to_string(),
@@ -418,6 +442,55 @@ pub fn MonitoringApp(on_open_developer: EventHandler<()>) -> Element {
         Screen::Stuck => match gate(&ov, "stuck extractions", &env_name, refresh) {
             Err(card) => card,
             Ok((o, pending)) => rsx! { fleet::StuckScreen { rows: fleet_view::stuck(&o, now), refreshing: pending, on_trace } },
+        },
+        Screen::Quarantine => match gate(&quarantine.read().clone(), "quarantine", &env_name, refresh) {
+            Err(card) => card,
+            Ok((q, pending)) => {
+                let (kpis, rows) = fleet_view::quarantine(&q, now);
+                rsx! {
+                    fleet::QuarantineScreen {
+                        kpis,
+                        rows,
+                        container: q.container.clone(),
+                        store: q.env.store_account.clone(),
+                        current: current_doc.clone(),
+                        refreshing: pending,
+                        fetching: downloading(),
+                        fetched: downloaded(),
+                        on_trace,
+                        on_fetch: move |(path, name): (String, String)| {
+                            let container = q.container.clone();
+                            let Some(directory) = probe::download_dir() else {
+                                downloaded.set(Some(Err("No Downloads or home folder to save into.".into())));
+                                return;
+                            };
+                            downloading.set(Some(path.clone()));
+                            downloaded.set(None);
+                            let e = env();
+                            spawn(async move {
+                                let request = Request::Fetch {
+                                    container,
+                                    path: path.clone(),
+                                    destination: directory.to_string_lossy().to_string(),
+                                    name,
+                                };
+                                let answer = probe::run::<crate::monitoring::model::Fetched>(e.as_str(), request).await;
+                                downloading.set(None);
+                                downloaded.set(Some(match answer {
+                                    Probe::Ok { data } => Ok(format!(
+                                        "Saved {} to {}",
+                                        crate::monitoring::format::bytes(data.bytes),
+                                        data.file
+                                    )),
+                                    Probe::Auth { message } | Probe::Unavailable { message } | Probe::Error { message } => {
+                                        Err(format!("{path} was not downloaded: {message}"))
+                                    }
+                                }));
+                            });
+                        },
+                    }
+                }
+            }
         },
         Screen::Refs => match gate(&ov, "reference pointers", &env_name, refresh) {
             Err(card) => card,
@@ -566,5 +639,113 @@ mod duplicate_arrivals {
         ARRIVALS.with(|a| a.set(6));
         dom.mark_dirty(ScopeId::APP);
         dom.render_immediate_to_vec();
+    }
+}
+
+#[cfg(test)]
+mod quarantine_screen {
+    use super::*;
+    use crate::monitoring::model::{AuditRow, BlobCheck, Doc, Env, Quarantine};
+    use dioxus::dioxus_core::Mutation;
+    use dioxus::html::{set_event_converter, PlatformEventData, SerializedHtmlEventConverter, SerializedMouseData};
+    use std::cell::RefCell;
+
+    thread_local! {
+        static TRACED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        /// A real environment's answer, when the recorded test put one here.
+        static RECORDED: RefCell<Option<Quarantine>> = const { RefCell::new(None) };
+    }
+
+    fn answer() -> Quarantine {
+        let doc = |guid: &str| Doc {
+            document_id: "D1".into(),
+            revision_id: "v1".into(),
+            file_guid: guid.into(),
+            business_key: "001-x".into(),
+            state: "Quarantined".into(),
+            ..Default::default()
+        };
+        Quarantine {
+            env: Env { store_account: "store1".into(), ..Default::default() },
+            container: "quarantine".into(),
+            // The same document arriving twice: each arrival is its own row.
+            docs: vec![doc("g1"), doc("g2")],
+            audit: vec![AuditRow {
+                document_id: "D1".into(),
+                event_type: "UploadQuarantined".into(),
+                occurred_at: "2026-08-10T04:00:00Z".into(),
+                detail: serde_json::json!({"reason": "PROJECT_ID_MISMATCH", "targetPath": "D1/v1/g1"}),
+                ..Default::default()
+            }],
+            blobs: vec![BlobCheck {
+                container: "quarantine".into(),
+                container_exists: true,
+                path: Some("D1/v1/g1".into()),
+                exists: Some(true),
+                size: Some(60),
+                last_modified: Some("2026-08-10T04:00:01Z".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[component]
+    fn Screen() -> Element {
+        let q = RECORDED.with(|r| r.borrow().clone()).unwrap_or_else(answer);
+        let (kpis, rows) = fleet_view::quarantine(&q, Utc::now());
+        rsx! {
+            fleet::QuarantineScreen {
+                kpis,
+                rows,
+                container: q.container.clone(),
+                store: q.env.store_account.clone(),
+                current: String::new(),
+                refreshing: false,
+                fetching: None,
+                fetched: None,
+                on_trace: move |q: String| TRACED.with(|t| t.borrow_mut().push(q)),
+                on_fetch: move |_: (String, String)| {},
+            }
+        }
+    }
+
+    /// CDW_PROBE_SAMPLES=<dir with quarantine.json> cargo test -- --ignored recorded_quarantine
+    #[test]
+    #[ignore]
+    fn the_recorded_quarantine_of_a_real_environment_renders() {
+        let dir = std::path::PathBuf::from(std::env::var("CDW_PROBE_SAMPLES").expect("CDW_PROBE_SAMPLES"));
+        let recorded = std::fs::read_to_string(dir.join("quarantine.json")).expect("quarantine.json");
+        let Probe::Ok { data } = crate::monitoring::probe::parse::<Quarantine>(&recorded, "") else { panic!("not ok") };
+        RECORDED.with(|r| *r.borrow_mut() = Some(data));
+        let mut dom = VirtualDom::new(Screen);
+        dom.rebuild_in_place();
+        dom.mark_dirty(ScopeId::APP);
+        dom.render_immediate_to_vec();
+        RECORDED.with(|r| *r.borrow_mut() = None);
+    }
+
+    /// Two arrivals of one document must not collide on a key, and a row must reach the trace.
+    #[test]
+    fn a_quarantine_row_opens_the_trace_of_that_arrival() {
+        set_event_converter(Box::new(SerializedHtmlEventConverter));
+        let mut dom = VirtualDom::new(Screen);
+        let mutations = dom.rebuild_to_vec();
+        dom.mark_dirty(ScopeId::APP);
+        dom.render_immediate_to_vec();
+        let click = mutations
+            .edits
+            .iter()
+            .filter_map(|edit| match edit {
+                Mutation::NewEventListener { name, id } if *name == "click" => Some(*id),
+                _ => None,
+            })
+            .next()
+            .expect("a clickable row");
+        let data = PlatformEventData::new(Box::new(SerializedMouseData::default()));
+        dom.runtime().handle_event("click", Event::new(std::rc::Rc::new(data) as std::rc::Rc<dyn std::any::Any>, true), click);
+        dom.render_immediate_to_vec();
+        TRACED.with(|t| assert_eq!(t.borrow().len(), 1, "the row traced once"));
+        TRACED.with(|t| assert!(["g1", "g2"].contains(&t.borrow()[0].as_str()), "{:?}", t.borrow()));
     }
 }

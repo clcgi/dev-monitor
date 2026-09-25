@@ -1,5 +1,5 @@
 use super::kit::*;
-use crate::monitoring::fleet_view::{paginate, sorted, toggle, DeadRow, Kpi, QueueRow, RefRow, Sort, StuckRow, TimingRow, PAGE_SIZE};
+use crate::monitoring::fleet_view::{paginate, sorted, toggle, DeadRow, Kpi, QuarRow, QueueRow, RefRow, Sort, StuckRow, TimingRow, PAGE_SIZE};
 use crate::monitoring::format as fmt;
 use crate::monitoring::model::DeadLetters;
 use crate::monitoring::tokens::*;
@@ -26,7 +26,10 @@ fn labels(names: &[&str]) -> Vec<(String, bool)> {
 fn KpiCard(kpi: Kpi) -> Element {
     let fg = tone_fg(kpi.tone);
     let label = format!("{}letter-spacing:.18em;color:{DIM}", mono(400, 9.0));
-    let value = format!("{}color:{fg};letter-spacing:-.01em", mono(500, 26.0));
+    let value = format!(
+        "{}color:{fg};letter-spacing:-.01em;min-width:0;overflow-wrap:anywhere",
+        mono(500, kpi_value_size(&kpi.value))
+    );
     let unit = format!("{}color:{DIM}", mono(400, 10.5));
     rsx! {
         div { style: "border:1px solid {BORDER};border-radius:14px;background:{CARD};padding:14px 16px;position:relative;min-width:0",
@@ -36,6 +39,17 @@ fn KpiCard(kpi: Kpi) -> Element {
                 span { style: "{unit}", "{kpi.unit}" }
             }
         }
+    }
+}
+
+/// A count fills the card at full size; a reason code like PROJECT_ID_MISMATCH would
+/// overflow it, so the type shrinks with the value's own length rather than being cropped.
+fn kpi_value_size(value: &str) -> f32 {
+    match value.chars().count() {
+        0..=8 => 26.0,
+        9..=13 => 20.0,
+        14..=20 => 15.0,
+        _ => 12.5,
     }
 }
 
@@ -128,6 +142,144 @@ pub fn QueueScreen(kpis: Vec<Kpi>, rows: Vec<QueueRow>, current: String, refresh
                 }
                     Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| page.set(p) }
                     Footnote { text: "Read from the catalog just now. pendingKey is shown because it is the only thing an operator can hand to the lakehouse team. Lifecycle names whichever comes first: the sweeper's quarantine or the landing delete, which writes nothing.".to_string() }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kpi_value_size;
+
+    #[test]
+    fn a_long_reason_code_shrinks_instead_of_overflowing_its_card() {
+        assert_eq!(kpi_value_size("4"), 26.0);
+        assert_eq!(kpi_value_size("3d 19h"), 26.0);
+        assert!(kpi_value_size("PROJECT_ID_MISMATCH") < kpi_value_size("458"));
+        assert!(kpi_value_size("PROMOTION_RULE_UNEVALUATABLE") < kpi_value_size("PROJECT_ID_MISMATCH"));
+    }
+}
+
+#[component]
+pub fn QuarantineScreen(
+    kpis: Vec<Kpi>,
+    rows: Vec<QuarRow>,
+    container: String,
+    store: String,
+    current: String,
+    refreshing: bool,
+    /// None while nothing is downloading; the row's path while its bytes are on the way.
+    fetching: Option<String>,
+    /// What came of the last download, as a sentence.
+    fetched: Option<Result<String, String>>,
+    on_trace: EventHandler<String>,
+    on_fetch: EventHandler<(String, String)>,
+) -> Element {
+    let mut sort = use_signal(|| Option::<Sort>::None);
+    let mut page = use_signal(|| 0usize);
+    let shown = paginate(&sorted(&rows, sort()), page());
+    let columns = "1.9fr 1.3fr 1fr .9fr .8fr 1.7fr 2.2fr";
+    let head = labels(&["DOCUMENT", "REASON", "MOVED", "HELD", "SIZE", "CAME FROM", "ADDRESS IN QUARANTINE"]);
+    let why_style = format!("{}line-height:1.5;color:{TEXT_BODY}", sans(400, 10.5));
+    let flag = format!("{}letter-spacing:.1em;text-transform:uppercase;padding:1px 6px;border:1px solid {BAD_BD};color:{CORAL};margin-left:8px", mono(500, 8.5));
+    let download_style = format!(
+        "display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:1px solid {ORANGE};border-radius:7px;background:{SELECTED_BG};color:{ORANGE_DEEP};cursor:pointer;flex-shrink:0;{}",
+        sans(600, 10.5)
+    );
+    let (note, note_fg) = match &fetched {
+        Some(Ok(text)) => (text.clone(), CYAN),
+        Some(Err(text)) => (text.clone(), CORAL),
+        None => (String::new(), DIM),
+    };
+    let note_style = format!("padding:10px 18px;border-top:1px solid {ROW_RULE};{}color:{note_fg};overflow-wrap:anywhere", sans(500, 11.5));
+    rsx! {
+        div { style: "display:flex;flex-direction:column;gap:16px;max-width:1620px",
+            Banner {
+                tone: Tone::Bad,
+                icon: "shield-warning",
+                title: "Kept, not lost — and not coming back on its own".to_string(),
+                body: "Quarantine is where the platform puts bytes it will not promote but refuses to destroy: every reason here is correctable, by a fixed manifest, a corrected registration or a rule that was never written. Nothing leaves this container without someone deciding it should, so a document sitting here waits indefinitely. The address of each object is shown, and its bytes can be downloaded and examined.".to_string(),
+            }
+            if refreshing { SweepBar { color: CORAL.to_string(), track: RULE.to_string() } }
+            div { class: "cdwm-kpis", style: "display:grid;gap:12px",
+                for k in kpis { KpiCard { key: "{k.label}", kpi: k.clone() } }
+            }
+            Panel {
+                icon: "shield-warning",
+                icon_color: CORAL.to_string(),
+                title: "In quarantine".to_string(),
+                subtitle: if sort().is_none() { "most recently moved first".to_string() } else { "sorted by column".to_string() },
+                right: format!("{} rows · {container}", rows.len()),
+                div { style: "overflow-x:auto",
+                    GridHead { columns: columns.to_string(), min_width: 1180, labels: head, sort: sort(), on_sort: move |c: usize| { sort.set(Some(toggle(sort(), c))); page.set(0); } }
+                    if rows.is_empty() {
+                        EmptyRow { text: "Quarantine is empty: no document has been refused by a rule, and no object is held here.".to_string() }
+                    }
+                    for (i, r) in shown.rows.clone().into_iter().enumerate() {
+                        {
+                            let id = r.file_guid.clone();
+                            let selected = !current.is_empty() && r.document_id == current;
+                            let row_bg = if selected { SELECTED_BG } else { "transparent" };
+                            let reason_fg = if r.orphan { DIM } else { CORAL };
+                            let download = r.download.clone();
+                            let object = (r.path.clone(), r.file_name.clone());
+                            let busy = fetching.as_deref() == Some(r.path.as_str());
+                            let download_icon: &'static str = if busy { "hourglass-high" } else { "download-simple" };
+                            let download_label = if busy { "downloading…" } else { "download" };
+                            rsx! {
+                                div {
+                                    key: "{r.document_id}-{r.file_guid}-{i}",
+                                    class: if selected { "cdwm-row cdwm-selected" } else { "cdwm-row" },
+                                    title: "Trace {r.document_id}",
+                                    style: "display:grid;grid-template-columns:{columns};gap:9px;padding:10px 18px;border-bottom:1px solid {ROW_RULE};align-items:start;cursor:pointer;background:{row_bg};min-width:1180px",
+                                    onclick: move |_| on_trace.call(id.clone()),
+                                    div { style: "min-width:0",
+                                        div { style: "{cell(500, 12.0, BLUE)}", "{r.key}" }
+                                        if !r.file_name.is_empty() {
+                                            div { style: "{cell(400, 10.5, DIM)};margin-top:3px", "{r.file_name}" }
+                                        }
+                                        if r.orphan { span { style: "{flag}", "no catalog row" } }
+                                        if r.bytes_missing { span { style: "{flag}", "no object" } }
+                                    }
+                                    div { style: "min-width:0",
+                                        div { style: "{cell(500, 11.0, reason_fg)}", "{r.reason}" }
+                                        div { style: "{why_style};margin-top:3px", "{r.why}" }
+                                    }
+                                    span { style: "{cell(400, 11.0, TEXT_BODY)}", "{r.moved}" }
+                                    span { style: "{cell(500, 11.5, TEXT_STRONG)}", "{r.held}" }
+                                    span { style: "{cell(400, 11.0, DIM)}", "{r.size}" }
+                                    span { style: "{cell(400, 10.5, DIM)}", "{r.origin}" }
+                                    div { style: "min-width:0;display:flex;flex-direction:column;gap:6px;align-items:flex-start",
+                                        span { style: "{cell(400, 10.5, TEXT_BODY)}", "{r.address}" }
+                                        div { style: "display:flex;gap:6px;flex-wrap:wrap",
+                                            if !r.bytes_missing {
+                                                button {
+                                                    r#type: "button",
+                                                    title: "Download a copy of these bytes to your Downloads folder",
+                                                    style: "{download_style}",
+                                                    onclick: move |e: Event<MouseData>| {
+                                                        e.stop_propagation();
+                                                        on_fetch.call(object.clone());
+                                                    },
+                                                    Icon { name: download_icon, size: 13.0, color: ORANGE_DEEP.to_string() }
+                                                    "{download_label}"
+                                                }
+                                            }
+                                            CopyButton {
+                                                text: download,
+                                                label: "copy command".to_string(),
+                                                title: "Copy the az command that downloads these bytes".to_string(),
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !note.is_empty() { div { style: "{note_style}", "{note}" } }
+                Pager { page: shown.page, pages: shown.pages, total: shown.total, on_page: move |p| page.set(p) }
+                Footnote { text: format!("Read from the catalog and from a listing of {store}/{container}, just now. Clicking a row opens its full trace. Download saves a copy of the bytes to your Downloads folder with your own Azure identity, reading only; nothing in Azure is moved, settled or deleted, and an existing file is never overwritten. A row marked \"no object\" is a catalog row whose bytes are not at the address the move recorded; \"no catalog row\" is the reverse.") }
             }
         }
     }

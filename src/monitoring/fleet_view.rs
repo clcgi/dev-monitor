@@ -1,5 +1,5 @@
 use super::format::{self as f, DASH};
-use super::model::{BlobCheck, DeadLetters, Doc, Overview, StuckRoot, Timing};
+use super::model::{AuditRow, BlobCheck, DeadLetters, Doc, Overview, Quarantine, StuckRoot, Timing};
 use super::trace_view::{Tone, STALL_AFTER_MINUTES};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
@@ -450,6 +450,206 @@ pub fn home(o: &Overview, now: DateTime<Utc>) -> Home {
     }
 }
 
+
+// ------------------------------------------------------------------ quarantine
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct QuarRow {
+    pub file_guid: String,
+    pub document_id: String,
+    pub key: String,
+    pub file_name: String,
+    /// The platform's own reason code, which is what a rule author searches for.
+    pub reason: String,
+    pub why: String,
+    pub moved: String,
+    pub held: String,
+    pub size: String,
+    /// Where the bytes were before the move: the arrival's own container and path.
+    pub origin: String,
+    /// The object's path inside the container, which a download names.
+    pub path: String,
+    /// container/path inside the storage account.
+    pub address: String,
+    /// The command that downloads these bytes, ready to paste.
+    pub download: String,
+    /// The catalog says quarantined and the container holds nothing at that address.
+    pub bytes_missing: bool,
+    /// An object with no catalog row on `Quarantined`.
+    pub orphan: bool,
+    pub moved_ts: Option<i64>,
+    pub held_secs: Option<i64>,
+    pub size_bytes: Option<i64>,
+}
+
+/// Each reason code in the operator's words. The codes come from
+/// `reconcile_blob.QUARANTINE_REASONS`, `routing_outcome` and the extraction job.
+pub fn why_quarantined(reason: &str) -> String {
+    match reason {
+        "METADATA_UNRESOLVED" => "Held for reference data that never arrived, then expired by the sweeper. The register row may simply be late.",
+        "PROJECT_ID_MISMATCH" => "The declared project number disagrees with the register's for this document. Correct the manifest and reprocess.",
+        "PATH_MISMATCH" => "The bytes did not arrive at the path the registration promised.",
+        "SIZE_MISMATCH" => "The bytes contradict the declared size, so the upload was not trusted.",
+        "CHECKSUM_MISMATCH" | "BACKFILL_DIGEST_MISMATCH" => "The bytes do not hash to the declared digest.",
+        "LATE_ARRIVAL" => "The bytes arrived after the registration's window had closed.",
+        "CATALOG_MISSING" => "Bytes arrived with no catalog row to attach them to.",
+        "NO_PROMOTION_RULE" => "No rule permits promoting this document, and promotion fails closed. Authoring a rule makes it succeed.",
+        "PROMOTION_RULE_UNEVALUATABLE" => "A promotion rule matched but could not be evaluated against this document.",
+        "NO_PROCESSING_RULE" => "Routing found no processing rule for this document.",
+        "" => "No reason was recorded with the move.",
+        _ => "Moved by a rule; the code above is the platform's own.",
+    }
+    .to_string()
+}
+
+fn quarantine_event<'a>(audit: &'a [AuditRow], document_id: &str) -> Option<&'a AuditRow> {
+    audit.iter().filter(|a| a.document_id == document_id).next_back()
+}
+
+fn detail(a: &AuditRow, key: &str) -> Option<String> {
+    match a.detail.get(key)? {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// The exception zones address an object as documentId/revisionId/fileGuid.
+fn guid_from_path(path: &str) -> Option<&str> {
+    let parts: Vec<&str> = path.split('/').collect();
+    (parts.len() == 3).then(|| parts[2]).filter(|guid| !guid.is_empty())
+}
+
+fn download_command(store: &str, container: &str, path: &str, file_name: &str) -> String {
+    let file = if file_name.is_empty() { path.rsplit('/').next().unwrap_or("document") } else { file_name };
+    format!(
+        "az storage blob download --account-name {store} --container-name {container} \
+         --name {path} --file ./{file} --auth-mode login"
+    )
+}
+
+pub fn quarantine(q: &Quarantine, now: DateTime<Utc>) -> (Vec<Kpi>, Vec<QuarRow>) {
+    let store = &q.env.store_account;
+    let mut rows: Vec<QuarRow> = Vec::new();
+    let mut claimed: Vec<String> = Vec::new();
+
+    for d in &q.docs {
+        let event = quarantine_event(&q.audit, &d.document_id);
+        let address_path = event
+            .and_then(|a| detail(a, "targetPath"))
+            .or_else(|| q.blobs.iter().find(|b| b.path.as_deref().and_then(guid_from_path) == Some(d.file_guid.as_str())).and_then(|b| b.path.clone()))
+            .unwrap_or_else(|| format!("{}/{}/{}", d.document_id, d.revision_id, d.file_guid));
+        let object = q.blobs.iter().find(|b| b.path.as_deref() == Some(address_path.as_str()));
+        if let Some(path) = object.and_then(|b| b.path.clone()) {
+            claimed.push(path);
+        }
+        let moved = event
+            .and_then(|a| f::parse(&a.occurred_at))
+            .or_else(|| object.and_then(|b| f::parse_opt(&b.last_modified)))
+            .or_else(|| f::parse_opt(&d.written_at));
+        let reason = event
+            .and_then(|a| detail(a, "reason"))
+            .or_else(|| d.quarantine_reason.clone())
+            .unwrap_or_default();
+        let size = object.and_then(|b| b.size).or(d.size_bytes);
+        rows.push(QuarRow {
+            file_guid: if d.file_guid.is_empty() { d.document_id.clone() } else { d.file_guid.clone() },
+            document_id: d.document_id.clone(),
+            key: d.display_key().to_string(),
+            file_name: d.file_name.clone(),
+            why: why_quarantined(&reason),
+            reason: if reason.is_empty() { DASH.into() } else { reason },
+            moved: moved.map(f::day_minute).unwrap_or_else(|| DASH.into()),
+            held: moved.map(|m| format!("{} ago", f::span(now - m))).unwrap_or_else(|| DASH.into()),
+            size: size.map(f::bytes).unwrap_or_else(|| DASH.into()),
+            origin: event
+                .and_then(|a| detail(a, "sourcePath").map(|p| match detail(a, "sourceContainer") {
+                    Some(c) => format!("{c}/{p}"),
+                    None => p,
+                }))
+                .or_else(|| d.landing.as_ref().filter(|l| !l.path.is_empty()).map(|l| format!("{}/{}", l.container, l.path)))
+                .or_else(|| d.raw.as_ref().filter(|r| !r.path.is_empty()).map(|r| format!("{}/{}", r.container, r.path)))
+                .unwrap_or_else(|| DASH.into()),
+            path: address_path.clone(),
+            address: format!("{}/{}", q.container, address_path),
+            download: download_command(store, &q.container, &address_path, &d.file_name),
+            bytes_missing: object.is_none(),
+            orphan: false,
+            moved_ts: moved.map(|m| m.timestamp()),
+            held_secs: moved.map(|m| (now - m).num_seconds()),
+            size_bytes: size.map(|s| s as i64),
+        });
+    }
+
+    // An object the catalog does not account for is the one thing a query alone cannot show.
+    for b in &q.blobs {
+        let Some(path) = b.path.clone() else { continue };
+        if claimed.contains(&path) {
+            continue;
+        }
+        let guid = guid_from_path(&path).unwrap_or(&path).to_string();
+        let moved = f::parse_opt(&b.last_modified);
+        let document_id = path.split('/').next().unwrap_or(&path).to_string();
+        rows.push(QuarRow {
+            file_guid: guid,
+            document_id: document_id.clone(),
+            key: document_id,
+            file_name: String::new(),
+            reason: DASH.into(),
+            why: "In the container with no catalog row on Quarantined. The bytes are here; what moved them is not recorded.".into(),
+            moved: moved.map(f::day_minute).unwrap_or_else(|| DASH.into()),
+            held: moved.map(|m| format!("{} ago", f::span(now - m))).unwrap_or_else(|| DASH.into()),
+            size: b.size.map(f::bytes).unwrap_or_else(|| DASH.into()),
+            origin: DASH.into(),
+            path: path.clone(),
+            address: format!("{}/{}", q.container, path),
+            download: download_command(store, &q.container, &path, ""),
+            bytes_missing: false,
+            orphan: true,
+            moved_ts: moved.map(|m| m.timestamp()),
+            held_secs: moved.map(|m| (now - m).num_seconds()),
+            size_bytes: b.size.map(|s| s as i64),
+        });
+    }
+
+    rows.sort_by_key(|r| std::cmp::Reverse(r.moved_ts));
+
+    let held_bytes: u64 = q.blobs.iter().filter_map(|b| b.size).sum();
+    let mut reasons: HashMap<&str, usize> = HashMap::new();
+    for r in rows.iter().filter(|r| !r.orphan) {
+        *reasons.entry(r.reason.as_str()).or_default() += 1;
+    }
+    let top = reasons.into_iter().max_by_key(|(reason, n)| (*n, std::cmp::Reverse(*reason)));
+    let oldest = rows.iter().filter_map(|r| r.held_secs).max();
+    let unaccounted = rows.iter().filter(|r| r.orphan).count();
+    let kpis = vec![
+        Kpi { label: "IN QUARANTINE", value: q.docs.len().to_string(), unit: "documents".into(), tone: if q.docs.is_empty() { Tone::Ok } else { Tone::Bad } },
+        Kpi {
+            label: "LONGEST HELD",
+            value: oldest.map(|s| f::span(Duration::seconds(s))).unwrap_or_else(|| DASH.into()),
+            unit: String::new(),
+            tone: if oldest.is_some() { Tone::Warn } else { Tone::Info },
+        },
+        Kpi {
+            label: "TOP REASON",
+            value: top.map(|(r, _)| r.to_string()).unwrap_or_else(|| DASH.into()),
+            unit: String::new(),
+            tone: if top.is_some() { Tone::Warn } else { Tone::Info },
+        },
+        // The container's own contents, which the catalog alone cannot report.
+        Kpi {
+            label: "OBJECTS IN THE CONTAINER",
+            value: q.blobs.len().to_string(),
+            unit: match unaccounted {
+                0 => format!("{}, all with a catalog row", f::bytes(held_bytes)),
+                1 => format!("{}, 1 with no catalog row", f::bytes(held_bytes)),
+                n => format!("{}, {n} with no catalog row", f::bytes(held_bytes)),
+            },
+            tone: if unaccounted > 0 { Tone::Bad } else { Tone::Info },
+        },
+    ];
+    (kpis, rows)
+}
+
 // ------------------------------------------------------------------ sorting and pages
 
 #[derive(Clone, PartialEq, Debug)]
@@ -591,6 +791,21 @@ impl Sortable for TimingRow {
             3 => SortKey::Num(self.samples as i64),
             4 => SortKey::Num(self.in_step as i64),
             5 => num(self.oldest_secs),
+            _ => SortKey::Missing,
+        }
+    }
+}
+
+impl Sortable for QuarRow {
+    fn sort_key(&self, column: usize) -> SortKey {
+        match column {
+            0 => text(&self.key),
+            1 => text(&self.reason),
+            2 => num(self.moved_ts),
+            3 => num(self.held_secs),
+            4 => num(self.size_bytes),
+            5 => text(&self.origin),
+            6 => text(&self.address),
             _ => SortKey::Missing,
         }
     }
@@ -862,4 +1077,119 @@ mod tests {
         assert_eq!(rows[0].waiting, 2);
         assert_eq!(rows[0].tone, Tone::Warn);
     }
+
+    fn quarantine_answer() -> Quarantine {
+        let doc = |id: &str, guid: &str, name: &str, reason: &str| Doc {
+            document_id: id.into(),
+            revision_id: "v1".into(),
+            file_guid: guid.into(),
+            file_name: name.into(),
+            business_key: format!("key-{id}"),
+            state: "Quarantined".into(),
+            quarantine_reason: Some(reason.into()),
+            size_bytes: Some(60),
+            ..Default::default()
+        };
+        let event = |id: &str, at: &str, reason: &str, target: &str| crate::monitoring::model::AuditRow {
+            document_id: id.into(),
+            event_type: "UploadQuarantined".into(),
+            occurred_at: at.into(),
+            detail: serde_json::json!({
+                "reason": reason, "zone": "quarantine", "targetPath": target,
+                "sourceContainer": "backfill-dms", "sourcePath": "campaign/inv.pdf",
+            }),
+            ..Default::default()
+        };
+        let object = |path: &str, at: &str, size: u64| BlobCheck {
+            zone: "quarantine".into(),
+            container: "quarantine".into(),
+            container_exists: true,
+            path: Some(path.into()),
+            exists: Some(true),
+            size: Some(size),
+            last_modified: Some(at.into()),
+            error: None,
+        };
+        Quarantine {
+            env: Env { name: "dev".into(), store_account: "store1".into(), ..Default::default() },
+            checked_at: "2026-08-14T09:00:00Z".into(),
+            container: "quarantine".into(),
+            docs: vec![
+                doc("D1", "g1", "inv.pdf", "PROJECT_ID_MISMATCH"),
+                doc("D2", "g2", "late.txt", "METADATA_UNRESOLVED"),
+            ],
+            audit: vec![
+                event("D1", "2026-08-10T04:00:00Z", "PROJECT_ID_MISMATCH", "D1/v1/g1"),
+                event("D2", "2026-08-13T04:00:00Z", "METADATA_UNRESOLVED", "D2/v1/g2"),
+            ],
+            blobs: vec![
+                object("D1/v1/g1", "2026-08-10T04:00:01Z", 60),
+                object("D9/v1/g9", "2026-08-12T04:00:00Z", 11),
+            ],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn a_quarantined_document_says_when_it_moved_why_and_where_its_bytes_are() {
+        let (_, rows) = quarantine(&quarantine_answer(), t("2026-08-14T09:00:00Z"));
+        // Newest move first.
+        assert_eq!(rows[0].document_id, "D2");
+        let d1 = rows.iter().find(|r| r.document_id == "D1").expect("D1");
+        assert_eq!(d1.reason, "PROJECT_ID_MISMATCH");
+        assert!(d1.why.contains("register"), "{}", d1.why);
+        assert_eq!(d1.moved, "08-10 04:00Z");
+        assert_eq!(d1.held, "4d 05h ago");
+        assert_eq!(d1.size, "60 B");
+        assert_eq!(d1.origin, "backfill-dms/campaign/inv.pdf");
+        assert_eq!(d1.address, "quarantine/D1/v1/g1");
+        assert!(d1.download.contains("--account-name store1"), "{}", d1.download);
+        assert!(d1.download.contains("--name D1/v1/g1 --file ./inv.pdf"), "{}", d1.download);
+        // The trace opens on the arrival itself, not on a documentId that may have arrived twice.
+        assert_eq!(d1.file_guid, "g1");
+        assert!(!d1.bytes_missing && !d1.orphan);
+    }
+
+    #[test]
+    fn a_catalog_row_without_bytes_and_bytes_without_a_catalog_row_are_both_reported() {
+        let (kpis, rows) = quarantine(&quarantine_answer(), t("2026-08-14T09:00:00Z"));
+        let d2 = rows.iter().find(|r| r.document_id == "D2").expect("D2");
+        assert!(d2.bytes_missing, "the container holds nothing at D2/v1/g2");
+        let orphan = rows.iter().find(|r| r.orphan).expect("the unaccounted object");
+        assert_eq!((orphan.document_id.as_str(), orphan.file_guid.as_str()), ("D9", "g9"));
+        assert_eq!(orphan.address, "quarantine/D9/v1/g9");
+        assert_eq!(orphan.reason, DASH);
+        assert_eq!(kpis[0].value, "2");
+        assert_eq!(kpis[2].value, "METADATA_UNRESOLVED");
+        assert!(kpis[3].unit.contains("1 with no catalog row"), "{}", kpis[3].unit);
+    }
+
+    #[test]
+    fn the_objects_card_says_how_many_have_no_catalog_row() {
+        let (kpis, _) = quarantine(&quarantine_answer(), t("2026-08-14T09:00:00Z"));
+        let objects = &kpis[3];
+        assert_eq!((objects.label, objects.value.as_str()), ("OBJECTS IN THE CONTAINER", "2"));
+        assert_eq!(objects.unit, "71 B, 1 with no catalog row");
+        let matched = Quarantine { blobs: vec![], ..quarantine_answer() };
+        assert_eq!(quarantine(&matched, t("2026-08-14T09:00:00Z")).0[3].unit, "0 B, all with a catalog row");
+    }
+
+    #[test]
+    fn an_empty_quarantine_says_so_rather_than_showing_a_wait() {
+        let empty = Quarantine { container: "quarantine".into(), ..Default::default() };
+        let (kpis, rows) = quarantine(&empty, t("2026-08-14T09:00:00Z"));
+        assert!(rows.is_empty());
+        assert_eq!((kpis[0].value.as_str(), kpis[0].tone), ("0", Tone::Ok));
+        assert_eq!(kpis[1].value, DASH);
+    }
+
+    #[test]
+    fn quarantine_sorts_by_the_column_asked_for() {
+        let (_, rows) = quarantine(&quarantine_answer(), t("2026-08-14T09:00:00Z"));
+        let by_moved = sorted(&rows, Some(Sort { column: 2, ascending: true }));
+        assert_eq!(by_moved.iter().map(|r| r.document_id.clone()).collect::<Vec<_>>(), vec!["D1", "D9", "D2"]);
+        let by_size = sorted(&rows, Some(Sort { column: 4, ascending: false }));
+        assert_eq!(by_size[0].size, "60 B");
+    }
+
 }
