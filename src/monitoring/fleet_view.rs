@@ -496,6 +496,12 @@ pub fn why_quarantined(reason: &str) -> String {
         "NO_PROMOTION_RULE" => "No rule permits promoting this document, and promotion fails closed. Authoring a rule makes it succeed.",
         "PROMOTION_RULE_UNEVALUATABLE" => "A promotion rule matched but could not be evaluated against this document.",
         "NO_PROCESSING_RULE" => "Routing found no processing rule for this document.",
+        // The extraction job quarantines the root on a breach; members written before it stay inert.
+        "ARCHIVE_ENCRYPTED" => "The archive needs a passphrase the platform does not hold, so extraction stopped and the root was quarantined.",
+        "ARCHIVE_UNREADABLE" => "The archive could not be read as an archive at all, so nothing was extracted.",
+        "MEMBER_PATH_TRAVERSAL" | "MEMBER_PATH_ABSOLUTE" => "A member's path pointed outside the archive, which the walk refuses.",
+        "MEMBER_ENTRY_TYPE_FORBIDDEN" => "The archive holds an entry that is neither a file nor a directory, which the walk refuses.",
+        "EXTRACTION_FAILED" => "Extraction failed partway; the root is quarantined and members written before the failure are inert.",
         "" => "No reason was recorded with the move.",
         _ => "Moved by a rule; the code above is the platform's own.",
     }
@@ -1162,6 +1168,22 @@ mod tests {
         assert_eq!(kpis[0].value, "2");
         assert_eq!(kpis[2].value, "METADATA_UNRESOLVED");
         assert!(kpis[3].unit.contains("1 with no catalog row"), "{}", kpis[3].unit);
+    }
+
+    #[test]
+    fn every_reason_the_platform_writes_has_words_of_its_own() {
+        // Codes taken from reconcile_blob.QUARANTINE_REASONS, routing_outcome and the extraction job.
+        for reason in [
+            "METADATA_UNRESOLVED", "PROJECT_ID_MISMATCH", "PATH_MISMATCH", "SIZE_MISMATCH",
+            "LATE_ARRIVAL", "CATALOG_MISSING", "NO_PROMOTION_RULE", "PROMOTION_RULE_UNEVALUATABLE",
+            "NO_PROCESSING_RULE", "ARCHIVE_ENCRYPTED", "ARCHIVE_UNREADABLE", "MEMBER_PATH_TRAVERSAL",
+            "MEMBER_ENTRY_TYPE_FORBIDDEN", "EXTRACTION_FAILED",
+        ] {
+            let why = why_quarantined(reason);
+            assert!(!why.starts_with("Moved by a rule"), "{reason} has no words of its own");
+        }
+        // An unknown code is named, not explained away.
+        assert!(why_quarantined("SOMETHING_NEW").starts_with("Moved by a rule"));
     }
 
     #[test]

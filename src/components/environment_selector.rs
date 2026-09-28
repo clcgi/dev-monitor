@@ -12,13 +12,13 @@ pub fn EnvironmentSelector(props: EnvSelectorProps) -> Element {
     let envs = [Environment::Dev, Environment::Stg];
 
     rsx! {
-        div { class: "mb-4 flex flex-wrap gap-1.5",
+        div { class: "inline-flex gap-[3px] rounded-lg bg-track p-[3px]",
             for env in envs.into_iter() {
                 button {
                     class: if Some(env) == props.selected {
-                        "flex items-center gap-2 rounded-full border border-accent bg-accent px-4 py-2 text-button-utility text-white shadow-sm transition-colors"
+                        "rounded-md bg-card px-4 py-1.5 text-button-utility font-semibold text-fg shadow-sm"
                     } else {
-                        "flex items-center gap-2 rounded-full border border-border-hard bg-transparent px-4 py-2 text-button-utility text-fg-muted hover:border-fg hover:text-fg transition-colors"
+                        "rounded-md bg-transparent px-4 py-1.5 text-button-utility text-fg-muted hover:text-fg"
                     },
                     onclick: move |_| props.on_select.call(env),
                     "{env}"

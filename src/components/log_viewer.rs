@@ -42,14 +42,14 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
 
             if !*auto_scroll.read() && logs_len > 0 {
                 button {
-                    class: "absolute bottom-4 right-4 z-10 rounded-full bg-white/10 px-4 py-2                             text-xs text-white shadow-lg backdrop-blur-md                             hover:bg-white/20 transition-colors border border-white/10",
+                    class: "absolute bottom-4 right-4 z-10 rounded-lg border border-border-hard bg-card px-3 py-1.5 text-caption text-fg shadow-sm hover:bg-hover",
                     onclick: move |_| {
                         auto_scroll.set(true);
                         let _ = eval(
                             "let el = document.getElementById('log-viewer-scroll'); if (el) { el.scrollTop = el.scrollHeight; }"
                         );
                     },
-                    "↓ Resume Auto-scroll"
+                    "Resume auto-scroll"
                 }
             }
 
@@ -72,18 +72,18 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
                 },
 
                 if props.logs.is_empty() {
-                    div { class: "p-2 text-white/40", "Waiting for output..." }
+                    div { class: "p-2 text-fg-faint", "Waiting for output..." }
                 } else {
                     for (idx, log) in props.logs.iter().enumerate() {
                         {
                             let tone = match log.stream {
-                                StreamType::Stdout => "text-white/80",
+                                StreamType::Stdout => "text-fg",
                                 StreamType::Stderr => "text-danger",
                                 StreamType::System => "text-accent italic",
                             };
                             let time_str = log.timestamp.format("%H:%M:%S").to_string();
                             let mark = if *highlighted.read() == Some(idx) {
-                                " -mx-2 rounded bg-accent/20 px-2 ring-1 ring-accent/50"
+                                " -mx-2 rounded bg-selected px-2 ring-1 ring-accent/40"
                             } else {
                                 ""
                             };
@@ -91,7 +91,7 @@ pub fn LogViewer(props: LogViewerProps) -> Element {
                                 div {
                                     id: "log-line-{idx}",
                                     class: "flex gap-3 break-all py-0.5 {tone}{mark}",
-                                    span { class: "shrink-0 text-white/30", "{time_str}" }
+                                    span { class: "shrink-0 text-fg-faint", "{time_str}" }
                                     span { class: "flex-1 whitespace-pre-wrap", "{log.content}" }
                                 }
                             }

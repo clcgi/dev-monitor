@@ -17,7 +17,7 @@ pub fn VerdictPanel(verdicts: Vec<Verdict>, on_jump: EventHandler<String>) -> El
                 span { class: "text-caption-strong text-fg-faint uppercase tracking-wider", "Results" }
                 span {
                     class: if passed == total {
-                        "text-caption-strong text-accent tabular-nums"
+                        "text-caption-strong text-success tabular-nums"
                     } else {
                         "text-caption-strong text-danger tabular-nums"
                     },
@@ -29,7 +29,7 @@ pub fn VerdictPanel(verdicts: Vec<Verdict>, on_jump: EventHandler<String>) -> El
                     li { key: "{verdict.label}",
                     button {
                         r#type: "button",
-                        class: "flex w-full items-center gap-3 px-5 py-2.5 text-left text-body hover:bg-black/5 dark:hover:bg-white/5 transition-colors",
+                        class: "flex w-full items-center gap-3 px-5 py-2.5 text-left text-body hover:bg-hover transition-colors",
                         title: if verdict.label.is_empty() {
                             "No run label to jump to"
                         } else {
@@ -42,7 +42,7 @@ pub fn VerdictPanel(verdicts: Vec<Verdict>, on_jump: EventHandler<String>) -> El
                         },
                         i {
                             class: if verdict.ok {
-                                "ph-fill ph-check-circle text-accent"
+                                "ph-fill ph-check-circle text-success"
                             } else {
                                 "ph-fill ph-x-circle text-danger"
                             },

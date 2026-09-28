@@ -6,30 +6,35 @@
 @source "./src/**/*.rs";
 
 @theme {
-  --color-primary: #0066cc;
-  --color-primary-focus: #0071e3;
-  --color-primary-on-dark: #2997ff;
-  
-  --color-ink: #1d1d1f;
-  --color-ink-muted-80: #333333;
-  --color-ink-muted-48: #7a7a7a;
-  --color-body-on-dark: #ffffff;
-  --color-body-muted: #cccccc;
-  
-  --color-canvas: #ffffff;
-  --color-parchment: #f5f5f7;
-  --color-pearl: #fafafc;
-  
-  --color-tile-1: #272729;
-  --color-tile-2: #2a2a2c;
-  --color-tile-3: #252527;
-  --color-pure-black: #000000;
-  
-  /* Semantic state colors mapping to Apple's subdued tones if possible, else standard */
-  --color-danger: #e25c5c;
-  --color-warn: #d69542;
-  --color-success: #4ca66b;
-  
+  /* SBM daylight, shared with CDW Monitoring. The type scale further down stays
+     the Developer Monitor's (11px chrome, 13px body): Monitoring's menu and
+     headers are larger than this screen should be. */
+  --color-primary: #F36F27;
+  --color-primary-focus: #DC7C38;
+  --color-primary-on-dark: #F36F27;
+
+  --color-ink: #1A1A1A;
+  --color-ink-muted-80: #4A4A4A;
+  --color-ink-muted-48: #6B7176;
+  --color-body-on-dark: #1A1A1A;
+  --color-body-muted: #4A4A4A;
+
+  --color-canvas: #FFFFFF;
+  --color-parchment: #F5F5F5;
+
+  --color-tile-1: #F5F5F5;
+  --color-tile-2: #FFFFFF;
+  --color-tile-3: #FFFFFF;
+  --color-pure-black: #1A1A1A;
+
+  --color-danger: var(--danger-color);
+  --color-warn: var(--warn-color);
+  --color-success: var(--success-color);
+  --color-danger-deep: #C00000;
+  --color-selected: var(--selected-bg);
+  --color-track: var(--track-bg);
+  --color-pearl: var(--pearl-bg);
+
   --font-display: 'SF Pro Display', system-ui, -apple-system, sans-serif;
   --font-text: 'SF Pro Text', system-ui, -apple-system, sans-serif;
   --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
@@ -79,40 +84,57 @@
   }
 }
 
-/* Default Dark Mode Mapping */
-:root {
-  --bg-app: var(--color-tile-1);
-  --bg-sidebar: var(--color-tile-2);
-  --bg-card: var(--color-tile-3);
-  --bg-nav: var(--color-pure-black);
-  
-  --text-main: var(--color-body-on-dark);
-  --text-muted: var(--color-body-muted);
-  --text-faint: var(--color-ink-muted-48);
-  
-  --border-soft: rgba(255, 255, 255, 0.08);
-  --border-hard: rgba(255, 255, 255, 0.15);
-  
-  --accent-color: var(--color-primary-on-dark);
-  --hover-bg: rgba(255, 255, 255, 0.05);
+/* Daylight is the client palette. Dark keeps the same orange, rules, and
+   selection shape on a lifted neutral surface — not the old black bar. */
+:root,
+.dm-light {
+  --bg-app: #F5F5F5;
+  --bg-sidebar: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-nav: #FFFFFF;
+
+  --text-main: #1A1A1A;
+  --text-muted: #4A4A4A;
+  --text-faint: #6B7176;
+
+  --border-soft: #E3E6E8;
+  --border-hard: #D9DCDF;
+
+  --accent-color: #F36F27;
+  --hover-bg: #F7F8F9;
+  --selected-bg: #FBEDE2;
+  --track-bg: #E9ECEE;
+  --pearl-bg: #F7F8F9;
+
+  --danger-color: #C00000;
+  --warn-color: #906E10;
+  --success-color: #17703C;
 }
 
-/* Light Mode Mapping */
-.light {
-  --bg-app: var(--color-parchment);
-  --bg-sidebar: var(--color-canvas);
-  --bg-card: var(--color-canvas);
-  --bg-nav: var(--color-pure-black); /* Nav is always black in Apple design */
-  
-  --text-main: var(--color-ink);
-  --text-muted: var(--color-ink-muted-80);
-  --text-faint: var(--color-ink-muted-48);
-  
-  --border-soft: rgba(0, 0, 0, 0.08);
-  --border-hard: rgba(0, 0, 0, 0.15);
-  
-  --accent-color: var(--color-primary);
-  --hover-bg: rgba(0, 0, 0, 0.05);
+.dm-dark {
+  --bg-app: #16181A;
+  --bg-sidebar: #1E2124;
+  --bg-card: #24282C;
+  --bg-nav: #1E2124;
+
+  --text-main: #F3F4F5;
+  --text-muted: #C8CDD1;
+  --text-faint: #8B939A;
+
+  --border-soft: #343A40;
+  --border-hard: #4A5158;
+
+  --accent-color: #F36F27;
+  --hover-bg: #2E3338;
+  --selected-bg: #3F2E24;
+  --track-bg: #16181A;
+  --pearl-bg: #2E3338;
+
+  /* Lifted so status text stays readable. Solid fills that carry white text
+     use danger-deep, which stays #C00000 in both themes. */
+  --danger-color: #F0A3A3;
+  --warn-color: #E3C07A;
+  --success-color: #8ED4A8;
 }
 
 /* Map semantic classes so Tailwind can use them (Tailwind v4 handles custom vars automatically if registered, but we can just use arbitrary values or explicitly define them) */
@@ -228,3 +250,23 @@
   .hover\:text-fg:hover { color: var(--text-main); }
   .hover\:bg-hover:hover { background-color: var(--hover-bg); }
 }
+
+/* @theme aliases such as --color-selected: var(--selected-bg) are resolved on
+   :root and inherited as a finished color. A .dm-dark override of the source
+   variable never reaches them, so a selected control keeps the daylight peach
+   under the light dark-mode label. These read the live variable on the element. */
+.bg-selected { background-color: var(--selected-bg); }
+.bg-track { background-color: var(--track-bg); }
+.bg-pearl { background-color: var(--pearl-bg); }
+.text-danger { color: var(--danger-color); }
+.text-warn { color: var(--warn-color); }
+.text-success { color: var(--success-color); }
+.bg-danger\/10 { background-color: color-mix(in oklab, var(--danger-color) 10%, transparent); }
+.bg-danger\/15 { background-color: color-mix(in oklab, var(--danger-color) 15%, transparent); }
+.bg-warn\/10 { background-color: color-mix(in oklab, var(--warn-color) 10%, transparent); }
+.bg-warn\/15 { background-color: color-mix(in oklab, var(--warn-color) 15%, transparent); }
+.bg-success\/10 { background-color: color-mix(in oklab, var(--success-color) 10%, transparent); }
+.bg-success\/15 { background-color: color-mix(in oklab, var(--success-color) 15%, transparent); }
+.border-danger\/30 { border-color: color-mix(in oklab, var(--danger-color) 30%, transparent); }
+.border-success\/30 { border-color: color-mix(in oklab, var(--success-color) 30%, transparent); }
+.border-warn\/40 { border-color: color-mix(in oklab, var(--warn-color) 40%, transparent); }

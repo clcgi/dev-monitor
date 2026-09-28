@@ -68,7 +68,7 @@ fn App() -> Element {
     let mut system_is_light = use_signal(|| dark_light::detect() != dark_light::Mode::Dark);
     // None follows the OS; Some(_) is the user's explicit choice.
     let mut theme_preference = use_signal(|| Option::<bool>::None);
-    // Must match a block in input.css, or the default palette renders silently.
+    // Kept for the palette picker. Appearance is the daylight or dark client palette.
     let theme = use_signal(|| DEFAULT_THEME.to_string());
     use_context_provider(|| theme);
 
@@ -79,7 +79,6 @@ fn App() -> Element {
                 tokio::task::spawn_blocking(|| dark_light::detect() != dark_light::Mode::Dark)
                     .await
                     .unwrap_or(*system_is_light.read());
-            // Written unconditionally: it records what the OS says, which is read only.
             if detected != *system_is_light.read() {
                 system_is_light.set(detected);
             }
@@ -133,11 +132,9 @@ fn App() -> Element {
     let monitoring = *experience.read() == Experience::Monitoring;
     let stylesheet = use_hook(|| format!("{PHOSPHOR_CSS}\n{TAILWIND_CSS}"));
     let is_light = theme_preference.read().unwrap_or(*system_is_light.read());
-    let theme_class = if is_light {
-        format!("{} light", theme.read())
-    } else {
-        theme.read().clone()
-    };
+    // Monitoring stays daylight. Dark is the Developer Monitor only, so the
+    // shared banner follows whichever experience is on screen.
+    let shell = if monitoring || is_light { "dm-light" } else { "dm-dark" };
 
     rsx! {
         // The stylesheet is RENDERED, not injected by script.
@@ -146,7 +143,7 @@ fn App() -> Element {
         // The theme lives on a RENDERED wrapper, not on <body> set by script.
         div {
             // `relative` so the update banner can position against the window rather than.
-            class: "cdw-root {theme_class} relative h-screen",
+            class: "cdw-root {shell} relative h-screen",
             components::update_banner::UpdateBanner {
                 ui: update.read().clone(),
                 current: services::updates::current_version().to_string(),

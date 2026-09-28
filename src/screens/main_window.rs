@@ -257,16 +257,15 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
         div { class: "flex h-screen flex-col bg-app",
             
             header {
-                class: "flex h-[44px] shrink-0 items-center justify-between bg-nav px-4 text-white",
+                class: "flex h-[44px] shrink-0 items-center justify-between border-b border-border-soft bg-nav px-4 text-fg",
                 div { class: "flex items-center gap-2",
-                    /* i { class: "ph-fill ph-apple-logo text-lg" } */
-                    span { class: "text-nav-link tracking-widest uppercase", "DEV Monitor" }
+                    span { class: "text-nav-link tracking-widest uppercase text-fg-muted", "DEV Monitor" }
                 }
                 div { class: "flex items-center gap-4",
                     button {
                         r#type: "button",
                         title: "CDW Monitoring",
-                        class: "text-nav-link text-white/80 hover:text-white transition-colors flex items-center gap-1",
+                        class: "text-nav-link text-fg-muted hover:text-fg transition-colors flex items-center gap-1",
                         onclick: move |_| props.on_open_monitoring.call(()),
                         i { class: "ph ph-crosshair text-sm" }
                         span { class: "hidden sm:inline", "Monitoring" }
@@ -274,18 +273,18 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     button {
                         r#type: "button",
                         title: "Execution history",
-                        class: "text-nav-link text-white/80 hover:text-white transition-colors flex items-center gap-1",
+                        class: "text-nav-link text-fg-muted hover:text-fg transition-colors flex items-center gap-1",
                         onclick: move |_| { let open = *history_open.read(); history_open.set(!open); },
                         i { class: "ph ph-clock-counter-clockwise text-sm" }
                         span { class: "hidden sm:inline", "History" }
                         if !state.read().history.is_empty() {
                             span {
-                                class: "ml-1 rounded-full bg-white/20 px-1.5 py-0.5 text-[9px]",
+                                class: "ml-1 rounded-md bg-selected px-1.5 py-0.5 text-[9px] text-accent",
                                 "{state.read().history.len()}"
                             }
                         }
                     }
-                    
+
                     if let Some(u) = props.pending_update.clone() {
                         button {
                             r#type: "button",
@@ -306,7 +305,7 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
                     button {
                         r#type: "button",
                         title: "Settings",
-                        class: "text-nav-link text-white/80 hover:text-white transition-colors \
+                        class: "text-nav-link text-fg-muted hover:text-fg transition-colors \
                                 flex items-center gap-1",
                         onclick: move |_| settings_open.set(true),
                         i { class: "ph ph-gear text-sm" }
@@ -505,27 +504,27 @@ pub fn MainWindow(mut props: MainWindowProps) -> Element {
             // Auth reminder modal overlay
             if *props.show_auth_reminder.read() {
                 div {
-                    class: "fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm",
+                    class: "fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4",
                     div {
-                        class: "flex max-h-[84vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border-soft bg-card shadow-2xl",
+                        class: "flex max-h-[84vh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-border-soft bg-card shadow-2xl",
                         div {
                             class: "flex shrink-0 items-center justify-between border-b border-border-soft px-5 py-4",
                             span { class: "text-body-strong text-fg", "Azure Authentication Required" }
                             button {
-                                class: "text-xl leading-none text-fg-faint hover:text-fg transition-colors",
+                                class: "rounded p-1 text-fg-faint hover:bg-hover hover:text-fg transition-colors",
                                 onclick: move |_| props.show_auth_reminder.set(false),
-                                "×"
+                                i { class: "ph ph-x text-sm" }
                             }
                         }
                         div { class: "flex flex-col gap-3 overflow-y-auto p-5 text-body text-fg-muted",
                             p { "You must be authenticated with Azure to interact with the environment." }
                             p { "Please ensure you have run:" }
                             div {
-                                class: "rounded-lg bg-black/5 dark:bg-black/40 p-4 font-mono text-[13px] text-fg shadow-inner border border-border-soft/50",
+                                class: "rounded-lg bg-pearl p-4 font-mono text-[13px] text-fg border border-border-soft",
                                 "az login"
                             }
                             button {
-                                class: "mt-4 w-full rounded-full bg-accent px-5 py-3 text-button-utility text-white hover:scale-95 transition-transform",
+                                class: "mt-4 w-full rounded-lg bg-accent px-5 py-2.5 text-button-utility text-white hover:opacity-90 transition-opacity",
                                 onclick: move |_| props.show_auth_reminder.set(false),
                                 "I have authenticated"
                             }

@@ -91,9 +91,8 @@ pub fn Sidebar(props: SidebarProps) -> Element {
         .collect();
 
     rsx! {
-        // Sidebar is bg-sidebar (Tile-2 in dark, Canvas in light). Edge-to-edge border is softer.
         aside {
-            class: "flex w-14 shrink-0 flex-col border-r border-border-soft bg-sidebar                     md:w-56 lg:w-64",
+            class: "flex w-14 shrink-0 flex-col border-r border-border-soft bg-sidebar md:w-56 lg:w-64",
 
             div { class: "flex items-center justify-between px-4 pb-2 pt-4",
                 div {
@@ -110,8 +109,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 }
             }
 
-            // Language filter styled as Apple configurator chips
-            div { class: "flex gap-2 px-3 pb-3 pt-2",
+            div { class: "mx-2 mb-2 flex gap-[3px] rounded-lg bg-track p-[3px]",
                 for (value, label, icon) in [
                     (Language::All, "All", "ph-list-dashes"),
                     (Language::Python, "Py", "ph-file-py"),
@@ -122,9 +120,9 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                         r#type: "button",
                         title: "{label}",
                         class: if lang == value {
-                            "flex flex-1 items-center justify-center gap-1.5 rounded-full border                              border-accent bg-accent text-button-utility text-white transition-all scale-100"
+                            "flex flex-1 items-center justify-center gap-1.5 rounded-md bg-card py-1 text-button-utility font-semibold text-fg shadow-sm"
                         } else {
-                            "flex flex-1 items-center justify-center gap-1.5 rounded-full border                              border-border-soft bg-transparent text-button-utility text-fg-muted                              hover:bg-black/5 dark:hover:bg-white/5 transition-colors scale-100 active:scale-95"
+                            "flex flex-1 items-center justify-center gap-1.5 rounded-md bg-transparent py-1 text-button-utility text-fg-muted hover:text-fg"
                         },
                         onclick: move |_| language.set(value),
                         i { class: "ph {icon}" }
@@ -182,18 +180,25 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                 for meta in list {
                                     {
                                     let running = props.running_script.as_ref() == Some(&meta.path);
+                                    let selected = Some(&meta.path) == props.selected_script.as_ref();
                                     // The last outcome, in the colours a Postman
                                     // user expects. A script never run keeps the
                                     // neutral colour -- green would claim a pass
                                     // that never happened.
                                     let name_class = name_class(props.statuses.get(&meta.path), running);
+                                    let file_icon = if meta.path.ends_with(".py") { "ph-file-py" } else { "ph-terminal-window" };
+                                    let file_icon_class = if selected {
+                                        format!("ph {file_icon} shrink-0 text-accent")
+                                    } else {
+                                        format!("ph {file_icon} shrink-0 text-fg-faint")
+                                    };
                                     let element: Element = rsx! {
                                     div {
                                         key: "{meta.path}",
-                                        class: if Some(&meta.path) == props.selected_script.as_ref() {
-                                            "group flex cursor-pointer items-center gap-2 rounded-lg                                              bg-accent/10 px-3 py-1.5 justify-center md:justify-start                                              mb-0.5 text-accent"
+                                        class: if selected {
+                                            "group flex cursor-pointer items-center gap-2 rounded-lg border-l-[3px] border-accent bg-selected px-3 py-1.5 justify-center md:justify-start mb-0.5 text-fg"
                                         } else {
-                                            "group flex cursor-pointer items-center gap-2 rounded-lg                                              bg-transparent px-3 py-1.5 hover:bg-black/5 dark:hover:bg-white/5                                              justify-center md:justify-start mb-0.5 text-fg"
+                                            "group flex cursor-pointer items-center gap-2 rounded-lg border-l-[3px] border-transparent px-3 py-1.5 hover:bg-hover justify-center md:justify-start mb-0.5 text-fg"
                                         },
                                         title: if meta.summary.is_empty() {
                                             "{meta.path}"
@@ -208,9 +213,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                         if running {
                                             i { class: "ph ph-spinner-gap animate-spin shrink-0 text-accent" }
                                         } else {
-                                            span { class: "shrink-0 leading-none opacity-80",
-                                                if meta.path.ends_with(".py") { "🐍" } else { "🐚" }
-                                            }
+                                            i { class: "{file_icon_class}" }
                                         }
                                         span { class: "{name_class}", "{meta.file_name()}" }
                                         if running {

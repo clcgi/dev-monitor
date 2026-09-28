@@ -26,8 +26,8 @@ pub fn TracePanel(props: TracePanelProps) -> Element {
     if props.traces.is_empty() {
         return rsx! {
             div { class: "flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center",
-                i { class: "ph ph-broadcast text-2xl text-white/30" }
-                div { class: "text-caption text-white/50",
+                i { class: "ph ph-broadcast text-lg text-fg-faint" }
+                div { class: "text-caption text-fg-faint",
                     if props.is_running {
                         "Waiting for the platform. Traces run about half a minute behind the pipeline."
                     } else {
@@ -48,7 +48,7 @@ pub fn TracePanel(props: TracePanelProps) -> Element {
 
     rsx! {
         div { class: "flex min-h-0 flex-1",
-            div { class: "flex w-44 shrink-0 flex-col overflow-y-auto border-r border-white/10",
+            div { class: "flex w-44 shrink-0 flex-col overflow-y-auto border-r border-border-soft",
                 for name in names.iter() {
                     {
                         let n = name.clone();
@@ -60,21 +60,21 @@ pub fn TracePanel(props: TracePanelProps) -> Element {
                         } else if live {
                             "size-1.5 shrink-0 animate-pulse rounded-full bg-accent"
                         } else {
-                            "size-1.5 shrink-0 rounded-full bg-white/25"
+                            "size-1.5 shrink-0 rounded-full bg-fg-faint"
                         };
                         let element: Element = rsx! {
                             button {
                                 key: "{name}",
                                 r#type: "button",
                                 class: if *name == current {
-                                    "flex items-center gap-2 border-l-2 border-accent bg-white/10 px-3 py-2 text-left text-caption text-white"
+                                    "flex items-center gap-2 border-l-[3px] border-accent bg-selected px-3 py-2 text-left text-caption text-fg"
                                 } else {
-                                    "flex items-center gap-2 border-l-2 border-transparent px-3 py-2 text-left text-caption text-white/60 hover:bg-white/5 hover:text-white"
+                                    "flex items-center gap-2 border-l-[3px] border-transparent px-3 py-2 text-left text-caption text-fg-muted hover:bg-hover hover:text-fg"
                                 },
                                 onclick: move |_| selected.set(Some(n.clone())),
                                 span { class: "{dot}" }
                                 span { class: "min-w-0 flex-1 truncate font-mono", "{name}" }
-                                span { class: "shrink-0 text-white/35", "{count}" }
+                                span { class: "shrink-0 text-fg-faint", "{count}" }
                             }
                         };
                         element
@@ -94,9 +94,9 @@ pub fn TracePanel(props: TracePanelProps) -> Element {
                                 class: if failed {
                                     "flex gap-3 break-all py-0.5 text-danger"
                                 } else {
-                                    "flex gap-3 break-all py-0.5 text-white/70"
+                                    "flex gap-3 break-all py-0.5 text-fg"
                                 },
-                                span { class: "shrink-0 text-white/30", "{clock}" }
+                                span { class: "shrink-0 text-fg-faint", "{clock}" }
                                 span { class: "flex-1 whitespace-pre-wrap", "{text}" }
                             }
                         };

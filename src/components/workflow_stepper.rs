@@ -145,7 +145,7 @@ pub fn WorkflowStepper(props: WorkflowStepperProps) -> Element {
                     if is_here && props.is_running { props.step_elapsed_s } else { None },
                 ) {
                     span {
-                        class: "rounded-full px-1.5 py-px font-mono text-[9px] tabular-nums {pill}",
+                        class: "rounded-md px-1.5 py-px font-mono text-[9px] tabular-nums {pill}",
                         {format_elapsed(secs)}
                     }
                 }

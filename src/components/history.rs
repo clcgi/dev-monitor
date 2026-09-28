@@ -19,7 +19,7 @@ pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
     rsx! {
         // The scrim.
         div {
-            class: "fixed inset-0 z-40 bg-black/40 backdrop-blur-sm",
+            class: "fixed inset-0 z-40 bg-black/40",
             onclick: move |_| props.on_close.call(()),
         }
         aside {
@@ -34,7 +34,7 @@ pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
                     "{props.history.len()}" }
                 button {
                     r#type: "button",
-                    class: "rounded p-1 text-fg-faint hover:bg-black/5 dark:hover:bg-white/5 hover:text-fg",
+                    class: "rounded p-1 text-fg-faint hover:bg-hover hover:text-fg",
                     onclick: move |_| props.on_close.call(()),
                     i { class: "ph ph-x" }
                 }
@@ -58,7 +58,7 @@ pub fn HistoryPanel(props: HistoryPanelProps) -> Element {
                                         span { class: "truncate text-xs font-semibold text-fg",
                                             "{script_name}" }
                                         span {
-                                            class: "shrink-0 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 \
+                                            class: "shrink-0 rounded-md bg-track px-1.5 py-0.5 \
                                                     text-[10px] uppercase tracking-wider text-fg-muted",
                                             "{env_name}"
                                         }
@@ -90,7 +90,7 @@ fn format_duration(d: Duration) -> String {
 fn render_status(status: &ScriptStatus) -> Element {
     const DOT: &str = "ml-auto size-2 shrink-0 rounded-full";
     match status {
-        ScriptStatus::Succeeded => rsx! { span { class: "{DOT} bg-accent", title: "Succeeded" } },
+        ScriptStatus::Succeeded => rsx! { span { class: "{DOT} bg-success", title: "Succeeded" } },
         ScriptStatus::Failed(_) => rsx! { span { class: "{DOT} bg-danger", title: "Failed" } },
         ScriptStatus::Cancelled => rsx! { span { class: "{DOT} bg-warn", title: "Cancelled" } },
         ScriptStatus::AppError(_) => rsx! { span { class: "{DOT} bg-danger", title: "Error" } },

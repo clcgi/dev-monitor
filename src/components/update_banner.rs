@@ -66,7 +66,7 @@ pub fn UpdateBanner(props: UpdateBannerProps) -> Element {
             class: "pointer-events-none absolute inset-x-0 top-0 z-50 flex justify-center px-3 pt-2",
             div {
                 class: "pointer-events-auto flex w-full max-w-xl items-center gap-3 rounded-lg \
-                        border border-border-soft bg-neutral-200 dark:bg-neutral-800 px-3 py-2 shadow-lg animate-pop",
+                        border border-border-soft bg-card px-3 py-2 shadow-lg",
                 i { class: "{icon}" }
                 div { class: "min-w-0 flex-1 leading-tight",
                     div { class: "text-xs text-fg",

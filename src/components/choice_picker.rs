@@ -43,9 +43,9 @@ pub fn ChoicePicker(props: ChoicePickerProps) -> Element {
                                     // the value is read when the process is spawned, so changing
                                     // it mid-run would silently describe the wrong document.
                                     disabled: props.disabled || empty,
-                                    class: "flex-1 rounded-full border border-border-hard bg-transparent px-4 py-2
+                                    class: "flex-1 rounded-lg border border-border-hard bg-card px-3 py-1.5
                                             text-button-utility text-fg disabled:opacity-50
-                                            hover:border-fg transition-colors",
+                                            hover:border-accent",
                                     value: "{selected}",
                                     onchange: move |e| props.on_choose.call((flag.clone(), e.value())),
                                     for value in values.iter() {

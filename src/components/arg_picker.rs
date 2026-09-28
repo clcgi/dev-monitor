@@ -31,9 +31,9 @@ pub fn ArgPicker(props: ArgPickerProps) -> Element {
                                 disabled: props.disabled,
                                 title: "{arg.help}",
                                 class: if on {
-                                    "flex items-center gap-2 rounded-full border border-accent                                      bg-accent px-4 py-2 text-button-utility text-white shadow-sm                                      disabled:opacity-50 transition-colors"
+                                    "flex items-center gap-2 rounded-lg border border-accent bg-selected px-3 py-1.5 text-button-utility text-accent disabled:opacity-50"
                                 } else {
-                                    "flex items-center gap-2 rounded-full border border-border-hard                                      bg-transparent px-4 py-2 text-button-utility text-fg-muted                                      hover:border-fg hover:text-fg disabled:opacity-50 transition-colors"
+                                    "flex items-center gap-2 rounded-lg border border-border-hard bg-card px-3 py-1.5 text-button-utility text-fg-muted hover:border-accent hover:text-fg disabled:opacity-50"
                                 },
                                 onclick: move |_| props.on_toggle.call(flag.clone()),
                                 i {

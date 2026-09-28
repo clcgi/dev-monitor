@@ -108,7 +108,7 @@ pub fn SettingsModal(props: SettingsModalProps) -> Element {
                                                 button {
                                                     r#type: "button",
                                                     title: "Delete this step",
-                                                    class: "shrink-0 rounded p-1 text-fg-faint hover:bg-danger hover:text-white",
+                                                    class: "shrink-0 rounded p-1 text-fg-faint hover:bg-danger-deep hover:text-white",
                                                     onclick: {
                                                         let id = id.clone();
                                                         move |_| { draft.write().remove(&id); }
@@ -189,7 +189,7 @@ pub fn SettingsModal(props: SettingsModalProps) -> Element {
                                         button {
                                             r#type: "button",
                                             title: "Delete this marker",
-                                            class: "shrink-0 rounded p-1 text-fg-faint hover:bg-danger hover:text-white",
+                                            class: "shrink-0 rounded p-1 text-fg-faint hover:bg-danger-deep hover:text-white",
                                             onclick: move |_| { syn.write().markers.remove(i); },
                                             i { class: "ph ph-trash text-xs" }
                                         }

@@ -49,13 +49,13 @@ pub fn Dashboard(props: DashboardProps) -> Element {
     let is_succeeded = matches!(status, ScriptStatus::Succeeded);
     let is_failed = matches!(status, ScriptStatus::Failed(_) | ScriptStatus::AppError(_));
 
-    let (status_str, status_class, dot_class) = match status {
-        ScriptStatus::Idle => ("Idle", "text-fg-faint", "bg-fg-faint"),
-        ScriptStatus::Running => ("Running", "text-accent", "bg-accent animate-pulse"),
-        ScriptStatus::Succeeded => ("Succeeded", "text-accent", "bg-accent"),
-        ScriptStatus::Failed(_) => ("Failed", "text-danger", "bg-danger"),
-        ScriptStatus::Cancelled => ("Cancelled", "text-warn", "bg-warn"),
-        ScriptStatus::AppError(_) => ("App Error", "text-danger", "bg-danger"),
+    let (status_str, status_class, dot_class, chip_class) = match status {
+        ScriptStatus::Idle => ("Idle", "text-fg-faint", "bg-fg-faint", "border-border-soft bg-pearl"),
+        ScriptStatus::Running => ("Running", "text-accent", "bg-accent animate-pulse", "border-accent/40 bg-selected"),
+        ScriptStatus::Succeeded => ("Succeeded", "text-success", "bg-success", "border-success/30 bg-success/10"),
+        ScriptStatus::Failed(_) => ("Failed", "text-danger", "bg-danger", "border-danger/30 bg-danger/10"),
+        ScriptStatus::Cancelled => ("Cancelled", "text-warn", "bg-warn", "border-warn/40 bg-warn/10"),
+        ScriptStatus::AppError(_) => ("App Error", "text-danger", "bg-danger", "border-danger/30 bg-danger/10"),
     };
 
     let duration_str = if let Some(start) = run.start_time {
@@ -104,7 +104,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
             } else {
                 div { class: "flex h-full min-h-0 flex-col gap-4 p-5 sm:p-6 overflow-y-auto",
 
-                    // HERO AREA (Apple style: massive typography, crisp status pill)
+                    // Title and status. The type scale stays text-display-lg / text-caption.
                     div { class: "flex shrink-0 flex-col gap-3",
                         div { class: "flex items-center justify-between gap-4",
                             div { class: "flex-1 truncate text-display-lg text-fg",
@@ -126,7 +126,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                         }
                                     }
                                 }
-                                div { class: "flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-caption-strong                                           {status_class} bg-black/5 dark:bg-white/5 border border-border-soft",
+                                div { class: "flex shrink-0 items-center gap-2 rounded-md border px-3 py-1 text-caption-strong {status_class} {chip_class}",
                                     span { class: "inline-block size-2 shrink-0 rounded-full {dot_class}" }
                                     "{status_str}{failed_code}"
                                 }
@@ -139,7 +139,7 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                     "{meta.category}"
                                 }
                                 if !meta.summary.is_empty() {
-                                    span { class: "min-w-0 flex-1 leading-relaxed text-neutral-500", "{meta.summary}" }
+                                    span { class: "min-w-0 flex-1 leading-relaxed text-fg-muted", "{meta.summary}" }
                                 }
                             }
                         }
@@ -151,8 +151,8 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                     // stacked by accident. They extend the control panel now,
                     // separated by rules rather than by borders.
                     div {
-                        class: "flex shrink-0 flex-col rounded-2xl border border-border-soft \
-                                bg-card shadow-sm",
+                        class: "flex shrink-0 flex-col rounded-xl border border-border-soft \
+                                bg-card",
 
                         div { class: "flex flex-col gap-4 p-5",
                             div { class: "flex flex-col gap-4 sm:flex-row sm:items-center",
@@ -172,13 +172,13 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                     }
                                     if is_running {
                                         button {
-                                            class: "rounded-full border border-danger/30 bg-danger/10 px-6 py-2 text-button-utility text-danger hover:bg-danger hover:text-white transition-all scale-100 active:scale-95",
+                                            class: "rounded-lg border border-danger/30 bg-danger/10 px-5 py-2 text-button-utility text-danger hover:bg-danger-deep hover:text-white",
                                             onclick: move |_| props.on_stop.call(()),
                                             "Cancel"
                                         }
                                     } else {
                                         button {
-                                            class: "rounded-full bg-accent px-6 py-2 text-button-utility text-white shadow-sm hover:opacity-90 transition-all scale-100 active:scale-95 disabled:cursor-default disabled:opacity-50 disabled:scale-100",
+                                            class: "rounded-lg bg-accent px-5 py-2 text-button-utility text-white hover:opacity-90 disabled:cursor-default disabled:opacity-50",
                                             disabled: no_env || busy_with.is_some(),
                                             onclick: move |_| props.on_run.call(()),
                                             "{btn_text}"
@@ -249,25 +249,21 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                     // usable height.
                     div {
                         class: if props.logs_open {
-                            "flex min-h-[16rem] flex-1 flex-col overflow-hidden rounded-2xl \
-                             border border-border-soft bg-[#1E1E1E] shadow-inner mt-2"
+                            "flex min-h-[16rem] flex-1 flex-col overflow-hidden rounded-xl \
+                             border border-border-soft bg-card mt-2"
                         } else {
-                            "flex shrink-0 flex-col overflow-hidden rounded-2xl border \
-                             border-border-soft bg-card shadow-sm mt-2"
+                            "flex shrink-0 flex-col overflow-hidden rounded-xl border \
+                             border-border-soft bg-card mt-2"
                         },
                         div {
                             class: if props.logs_open {
-                                "flex shrink-0 items-center bg-black/40"
+                                "flex shrink-0 items-center border-b border-border-soft"
                             } else {
-                                "flex shrink-0 items-center bg-transparent"
+                                "flex shrink-0 items-center"
                             },
                             button {
                                 r#type: "button",
-                                class: if props.logs_open {
-                                    "flex shrink-0 items-center gap-2 px-4 py-3 text-caption-strong text-white/70 hover:text-white transition-colors"
-                                } else {
-                                    "flex shrink-0 items-center gap-2 px-4 py-3 text-caption-strong text-fg-muted hover:text-fg transition-colors"
-                                },
+                                class: "flex shrink-0 items-center gap-2 px-4 py-3 text-caption-strong text-fg-muted hover:text-fg transition-colors",
                                 onclick: move |_| props.on_toggle_logs.call(()),
                                 i {
                                     class: if props.logs_open { "ph ph-caret-down text-lg" } else { "ph ph-caret-right text-lg" },
@@ -280,9 +276,9 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                     button {
                                         r#type: "button",
                                         class: if !props.traces_tab {
-                                            "rounded-md bg-white/10 px-3 py-1 text-caption-strong text-white"
+                                            "rounded-md bg-selected px-3 py-1 text-caption-strong text-fg"
                                         } else {
-                                            "rounded-md px-3 py-1 text-caption-strong text-white/50 hover:text-white"
+                                            "rounded-md px-3 py-1 text-caption-strong text-fg-muted hover:text-fg"
                                         },
                                         onclick: move |_| props.on_tab.call(false),
                                         "Technical Logs"
@@ -290,16 +286,16 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                     button {
                                         r#type: "button",
                                         class: if props.traces_tab {
-                                            "flex items-center gap-1.5 rounded-md bg-white/10 px-3 py-1 text-caption-strong text-white"
+                                            "flex items-center gap-1.5 rounded-md bg-selected px-3 py-1 text-caption-strong text-fg"
                                         } else {
-                                            "flex items-center gap-1.5 rounded-md px-3 py-1 text-caption-strong text-white/50 hover:text-white"
+                                            "flex items-center gap-1.5 rounded-md px-3 py-1 text-caption-strong text-fg-muted hover:text-fg"
                                         },
                                         onclick: move |_| props.on_tab.call(true),
                                         "Platform traces"
                                         // The count is the affordance: without it
                                         // nothing says the tab has anything in it.
                                         if !run.traces.is_empty() {
-                                            span { class: "rounded-full bg-white/20 px-1.5 text-[10px]",
+                                            span { class: "rounded-md bg-track px-1.5 text-[10px] text-fg-muted",
                                                 "{run.traces.len()}" }
                                         }
                                     }
