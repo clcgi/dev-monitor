@@ -90,6 +90,20 @@ pub enum DeclaredSteps {
     Only(Vec<StepId>),
 }
 
+/// One flag whose value the operator types, because no list can hold all of it.
+///
+/// `suggestions` are offered as a pick-list on the field without closing it:
+/// `--messages 100|500|1000` gives three to click and still accepts 37, and
+/// `--batch-id loadtest-100|…` offers the datasets while a real campaign GUID
+/// remains typeable. A flag whose value set really is closed belongs in
+/// `CDW_CHOICE`, where anything else is an error.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ScriptInput {
+    pub flag: String,
+    pub help: String,
+    pub suggestions: Vec<String>,
+}
+
 /// One script, as the app understands it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ScriptMeta {
@@ -102,8 +116,13 @@ pub struct ScriptMeta {
     pub args: Vec<ScriptArg>,
     /// Flags that take a value, each with the list to choose from.
     pub choices: Vec<ScriptChoice>,
+    /// Flags that take a value nothing can enumerate: a batch id, a date, a count.
+    pub inputs: Vec<ScriptInput>,
     /// A one-line summary, taken from the header when given.
     pub summary: String,
+    /// What to call the script in the sidebar. Empty when the header declares none,
+    /// and the file name stands in.
+    pub title: String,
     /// Not offered for running.
     pub library: bool,
 }
@@ -111,6 +130,11 @@ pub struct ScriptMeta {
 impl ScriptMeta {
     pub fn file_name(&self) -> &str {
         self.path.rsplit('/').next().unwrap_or(&self.path)
+    }
+
+    /// The sidebar label: what the script is, falling back to what it is called.
+    pub fn label(&self) -> &str {
+        if self.title.is_empty() { self.file_name() } else { &self.title }
     }
 
     /// The stages to draw, or `None` to draw the whole chain.
@@ -165,7 +189,9 @@ pub fn parse_meta(
         declared_steps: DeclaredSteps::Unknown,
         args: Vec::new(),
         choices: Vec::new(),
+        inputs: Vec::new(),
         summary: String::new(),
+        title: String::new(),
         library: KNOWN_LIBRARIES.contains(&repo_relative.rsplit('/').next().unwrap_or("")),
     };
 
@@ -179,6 +205,7 @@ pub fn parse_meta(
                 match key.as_str() {
                     "category" => meta.category = value,
                     "summary" => meta.summary = value,
+                    "title" => meta.title = value,
                     "library" => meta.library = value.eq_ignore_ascii_case("true"),
                     "steps" => {
                         meta.declared_steps = if value.eq_ignore_ascii_case("none") {
@@ -214,10 +241,42 @@ pub fn parse_meta(
             if let Some(choice) = parse_choice(payload, repo_root) {
                 meta.choices.push(choice);
             }
+        } else if let Some(payload) = syntax.payload(line, MarkerKind::InputHeader) {
+            if let Some(input) = parse_input(payload) {
+                meta.inputs.push(input);
+            }
         }
     }
 
     meta
+}
+
+/// One `CDW_INPUT` line: `--batch-id  help`, or `--messages 100|500|1000  help`,
+/// where the second token is a pipe-separated pick-list rather than prose.
+fn parse_input(payload: &str) -> Option<ScriptInput> {
+    let payload = payload.trim();
+    let (flag, rest) = payload.split_once(char::is_whitespace).unwrap_or((payload, ""));
+    if !flag.starts_with('-') {
+        return None;
+    }
+    let rest = rest.trim();
+    // A pick-list is only a pick-list when it holds a separator. Prose never does,
+    // and treating "How many keys to print" as one value would offer it as a value.
+    let (suggestions, help) = match rest.split_once(char::is_whitespace) {
+        Some((first, tail)) if first.contains('|') => (first, tail),
+        None if rest.contains('|') => (rest, ""),
+        _ => ("", rest),
+    };
+    Some(ScriptInput {
+        flag: flag.to_string(),
+        help: help.trim().to_string(),
+        suggestions: suggestions
+            .split('|')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect(),
+    })
 }
 
 /// One `CDW_CHOICE` line: `--case @tools/fixtures/m.csv:source_filename  help`,
@@ -445,9 +504,13 @@ fn collect(
 fn category_rank(category: &str) -> u8 {
     match category {
         "Flows" => 0,
-        "Verification" => 1,
-        "Simulation" => 2,
-        "Maintenance" => 3,
+        // A refusal proven on purpose is not a broken flow, so it gets its own group.
+        "Guards" => 1,
+        "Verification" => 2,
+        "Simulation" => 3,
+        "Benchmarks" => 4,
+        "Operations" => 5,
+        "Maintenance" => 6,
         _ => 9,
     }
 }
@@ -510,6 +573,102 @@ mod tests {
         let groups = discover(&dir, &StepCatalog::defaults(), &MarkerSyntax::default());
 
         assert!(groups.is_empty(), "a generated or hidden directory was walked");
+    }
+
+    /// A flag whose value nothing can enumerate -- the gap that made
+    /// `query_backfill_batch_status.sh --source DMS --batch-id X` unrunnable
+    /// from the app, since a dropdown needs a list and batch ids have none.
+    #[test]
+    fn a_free_text_flag_is_offered_as_an_input() {
+        let dir = tempdir("input-header");
+        let path = write(
+            &dir,
+            "query_backfill_batch_status.sh",
+            "# CDW_SCRIPT: category=Operations; title=Backfill batch outcomes, per document\n\
+             # CDW_INPUT: --batch-id  The campaign batch to report on\n\
+             # CDW_CHOICE: --source DMS|CDR  Which source system\n\
+             # CDW_ARG: --json  Machine-readable output\n",
+        );
+        let meta = parse_meta(&path, "tools/operations/query_backfill_batch_status.sh", &dir,
+                              &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.inputs.len(), 1, "one typed value");
+        assert_eq!(meta.inputs[0].flag, "--batch-id");
+        assert_eq!(meta.inputs[0].help, "The campaign batch to report on");
+        assert!(meta.inputs[0].suggestions.is_empty(), "prose is not a pick-list");
+        // The three declarations do not collide: a flag is a toggle, a dropdown or a field.
+        assert_eq!(meta.choices.len(), 1);
+        assert_eq!(meta.args.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A typed flag can still carry values to pick from, without closing the field.
+    #[test]
+    fn an_input_can_offer_suggestions_and_still_accept_anything() {
+        let dir = tempdir("input-suggestions");
+        let path = write(
+            &dir,
+            "x.sh",
+            "# CDW_SCRIPT: category=Operations\n\
+             # CDW_INPUT: --messages 100|500|1000  How many member messages to model\n\
+             # CDW_INPUT: --batch-id  The campaign batch\n",
+        );
+        let meta = parse_meta(&path, "tools/x.sh", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
+        let messages = &meta.inputs[0];
+        assert_eq!(messages.suggestions, vec!["100", "500", "1000"]);
+        assert_eq!(messages.help, "How many member messages to model", "the list is not the help");
+        assert!(meta.inputs[1].suggestions.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The seed load-test generator's own header, byte for byte, against a values file
+    /// shaped like the one it names: a dropdown the app cannot read is a flag nobody can set.
+    #[test]
+    fn a_dataset_choice_is_offered_with_all_first() {
+        let dir = tempdir("dataset-choice");
+        std::fs::create_dir_all(dir.join("tools/fixtures")).unwrap();
+        std::fs::write(
+            dir.join("tools/fixtures/seed_loadtest_datasets.csv"),
+            "dataset,folders,description\nall,1600,every dataset in one run\n             loadtest-100,100,50 DMS folders and 50 CDR folders\n             loadtest-500,500,250 DMS folders and 250 CDR folders\n             loadtest-1000,1000,500 DMS folders and 500 CDR folders\n",
+        )
+        .unwrap();
+        let path = write(
+            &dir,
+            "generate_seed_loadtest_data.py",
+            "# CDW_SCRIPT: category=Simulation; title=Build seed (backfill) load-test datasets; steps=none; summary=s\n             # CDW_ARG: --dry-run  Print the plan\n             # CDW_CHOICE: --dataset @tools/fixtures/seed_loadtest_datasets.csv:dataset  Which dataset to build, or all of them\n",
+        );
+        let meta = parse_meta(&path, "tools/simulation/generate_seed_loadtest_data.py", &dir,
+                              &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.args.len(), 1, "the toggle is still offered");
+        let choice = meta.choices.first().expect("a --dataset dropdown");
+        assert_eq!(choice.flag, "--dataset");
+        assert_eq!(
+            choice.values.clone(),
+            vec!["all", "loadtest-100", "loadtest-500", "loadtest-1000"],
+            "every dataset is offered, with `all` first so it is preselected"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_declared_title_is_the_label_and_the_file_name_stands_in_otherwise() {
+        let dir = tempdir("title");
+        let titled = write(&dir, "cdr_small_flat_promotes.py",
+            "# CDW_SCRIPT: category=Flows; title=CDR flat document promotes to raw; summary=s\n");
+        let meta = parse_meta(&titled, "tools/cdr_small_flat_promotes.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.label(), "CDR flat document promotes to raw");
+        let plain = write(&dir, "other.py", "# CDW_SCRIPT: category=Flows\n");
+        let meta = parse_meta(&plain, "tools/other.py", &dir, &StepCatalog::defaults(), &MarkerSyntax::default());
+        assert_eq!(meta.label(), "other.py", "a script without a title keeps its file name");
+    }
+
+    #[test]
+    fn guards_sort_after_flows_and_every_named_group_before_other() {
+        let ranks: Vec<u8> = ["Flows", "Guards", "Verification", "Simulation", "Benchmarks", "Operations", "Maintenance"]
+            .iter()
+            .map(|c| category_rank(c))
+            .collect();
+        assert!(ranks.windows(2).all(|w| w[0] < w[1]), "{ranks:?}");
+        assert!(ranks.iter().all(|r| *r < category_rank("Other")));
     }
 
     #[test]

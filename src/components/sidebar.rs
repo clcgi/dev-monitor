@@ -215,7 +215,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                                         } else {
                                             i { class: "{file_icon_class}" }
                                         }
-                                        span { class: "{name_class}", "{meta.file_name()}" }
+                                        span { class: "{name_class}", "{meta.label()}" }
                                         if running {
                                             span {
                                                 class: "ml-auto hidden size-2 shrink-0 animate-pulse rounded-full bg-accent md:block",

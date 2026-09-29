@@ -8,6 +8,7 @@ use crate::components::verdict_panel::VerdictPanel;
 use crate::components::trace_panel::TracePanel;
 use crate::components::arg_picker::ArgPicker;
 use crate::components::choice_picker::ChoicePicker;
+use crate::components::input_picker::InputPicker;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct DashboardProps {
@@ -195,6 +196,13 @@ pub fn Dashboard(props: DashboardProps) -> Element {
                                 chosen: run.chosen.clone(),
                                 disabled: is_running,
                                 on_choose: move |pair: (String, String)| props.on_choose.call(pair),
+                            }
+
+                            InputPicker {
+                                inputs: state.selected_meta.as_ref().map(|m| m.inputs.clone()).unwrap_or_default(),
+                                chosen: run.chosen.clone(),
+                                disabled: is_running,
+                                on_set: move |pair: (String, String)| props.on_choose.call(pair),
                             }
 
                             ArgPicker {

@@ -106,7 +106,7 @@ impl ScriptState {
     /// marker. The two marker styles in the repository disagree about what
     /// DONE means: `tools/cdw_workflows/flow.py` emits START and DONE together
     /// because a stage is marked when its evidence is OBSERVED, while
-    /// `tools/run_against_dev.py` brackets real work with them. Timing to DONE
+    /// `tools/simulation/run_against_dev.py` brackets real work with them. Timing to DONE
     /// reads every corpus flow as eleven instant stages; timing to the next
     /// START is the same number for the second style, because its next START
     /// is the line after its DONE.
@@ -332,6 +332,21 @@ mod tests {
                 "--case".to_string(),
                 "001.17033.000001-AA001-10 - A.pdf".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn a_typed_value_reaches_argv_like_a_chosen_one() {
+        // A CDW_INPUT flag shares the `chosen` map with the dropdowns, so it needs
+        // no state of its own -- and inherits the empty-means-omitted rule.
+        let mut state = AppState::new();
+        let entry = state.entry("tools/operations/query_backfill_batch_status.sh");
+        entry.chosen.insert("--batch-id".into(), "loadtest-1000".into());
+        entry.chosen.insert("--source".into(), "DMS".into());
+        assert_eq!(
+            entry.command_args(),
+            vec!["--batch-id", "loadtest-1000", "--source", "DMS"],
+            "sorted, and each value its own argv entry"
         );
     }
 

@@ -11,5 +11,6 @@ pub mod choice_picker;
 pub mod theme_toggle;
 pub mod update_banner;
 pub mod icon_picker;
+pub mod input_picker;
 pub mod settings_modal;
 pub mod trace_panel;

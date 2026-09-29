@@ -519,10 +519,16 @@ fn detail(a: &AuditRow, key: &str) -> Option<String> {
     }
 }
 
-/// The exception zones address an object as documentId/revisionId/fileGuid.
-fn guid_from_path(path: &str) -> Option<&str> {
-    let parts: Vec<&str> = path.split('/').collect();
-    (parts.len() == 3).then(|| parts[2]).filter(|guid| !guid.is_empty())
+/// The fileGuid an exception object's path ends in.
+///
+/// `build_exception_path` re-homes the source blob's own path, so the depth is the
+/// pipeline's, not three segments, and the leaf carries the extension. Pipeline paths
+/// end in the fileGuid either way, which is what makes the leaf the identity; objects
+/// written before that change end in a bare fileGuid and are read by the same rule.
+fn guid_in_path(path: &str) -> Option<&str> {
+    let leaf = path.rsplit('/').next()?;
+    let guid = leaf.split_once('.').map_or(leaf, |(stem, _)| stem);
+    (!guid.is_empty()).then_some(guid)
 }
 
 fn download_command(store: &str, container: &str, path: &str, file_name: &str) -> String {
@@ -540,11 +546,22 @@ pub fn quarantine(q: &Quarantine, now: DateTime<Utc>) -> (Vec<Kpi>, Vec<QuarRow>
 
     for d in &q.docs {
         let event = quarantine_event(&q.audit, &d.document_id);
+        // The move's own record first; then the object whose leaf is this arrival's
+        // fileGuid; then the source path, which is what the mirrored address would be.
+        // Never a fabricated one: an address no object can be at is worse than none.
+        let by_guid = q
+            .blobs
+            .iter()
+            .find(|b| !d.file_guid.is_empty() && b.path.as_deref().and_then(guid_in_path) == Some(d.file_guid.as_str()));
         let address_path = event
             .and_then(|a| detail(a, "targetPath"))
-            .or_else(|| q.blobs.iter().find(|b| b.path.as_deref().and_then(guid_from_path) == Some(d.file_guid.as_str())).and_then(|b| b.path.clone()))
-            .unwrap_or_else(|| format!("{}/{}/{}", d.document_id, d.revision_id, d.file_guid));
-        let object = q.blobs.iter().find(|b| b.path.as_deref() == Some(address_path.as_str()));
+            .or_else(|| by_guid.and_then(|b| b.path.clone()))
+            .or_else(|| d.raw.as_ref().map(|r| r.path.clone()).filter(|p| !p.is_empty()))
+            .or_else(|| d.landing.as_ref().map(|l| l.path.clone()).filter(|p| !p.is_empty()));
+        let object = address_path
+            .as_deref()
+            .and_then(|path| q.blobs.iter().find(|b| b.path.as_deref() == Some(path)))
+            .or(by_guid);
         if let Some(path) = object.and_then(|b| b.path.clone()) {
             claimed.push(path);
         }
@@ -575,9 +592,15 @@ pub fn quarantine(q: &Quarantine, now: DateTime<Utc>) -> (Vec<Kpi>, Vec<QuarRow>
                 .or_else(|| d.landing.as_ref().filter(|l| !l.path.is_empty()).map(|l| format!("{}/{}", l.container, l.path)))
                 .or_else(|| d.raw.as_ref().filter(|r| !r.path.is_empty()).map(|r| format!("{}/{}", r.container, r.path)))
                 .unwrap_or_else(|| DASH.into()),
-            path: address_path.clone(),
-            address: format!("{}/{}", q.container, address_path),
-            download: download_command(store, &q.container, &address_path, &d.file_name),
+            path: object.and_then(|b| b.path.clone()).or_else(|| address_path.clone()).unwrap_or_default(),
+            address: match &address_path {
+                Some(path) => format!("{}/{}", q.container, path),
+                None => DASH.into(),
+            },
+            download: match &address_path {
+                Some(path) => download_command(store, &q.container, path, &d.file_name),
+                None => String::new(),
+            },
             bytes_missing: object.is_none(),
             orphan: false,
             moved_ts: moved.map(|m| m.timestamp()),
@@ -592,13 +615,14 @@ pub fn quarantine(q: &Quarantine, now: DateTime<Utc>) -> (Vec<Kpi>, Vec<QuarRow>
         if claimed.contains(&path) {
             continue;
         }
-        let guid = guid_from_path(&path).unwrap_or(&path).to_string();
+        let guid = guid_in_path(&path).unwrap_or(&path).to_string();
         let moved = f::parse_opt(&b.last_modified);
-        let document_id = path.split('/').next().unwrap_or(&path).to_string();
         rows.push(QuarRow {
-            file_guid: guid,
-            document_id: document_id.clone(),
-            key: document_id,
+            // Traceable by the leaf; the path is the only name it has, since a mirrored
+            // address names the source system, not the document.
+            file_guid: guid.clone(),
+            document_id: String::new(),
+            key: path.clone(),
             file_name: String::new(),
             reason: DASH.into(),
             why: "In the container with no catalog row on Quarantined. The bytes are here; what moved them is not recorded.".into(),
@@ -1162,7 +1186,10 @@ mod tests {
         let d2 = rows.iter().find(|r| r.document_id == "D2").expect("D2");
         assert!(d2.bytes_missing, "the container holds nothing at D2/v1/g2");
         let orphan = rows.iter().find(|r| r.orphan).expect("the unaccounted object");
-        assert_eq!((orphan.document_id.as_str(), orphan.file_guid.as_str()), ("D9", "g9"));
+        // No catalog row means no documentId to claim; the path is the only name it has,
+        // and the leaf is what a trace can be run on.
+        assert_eq!((orphan.document_id.as_str(), orphan.file_guid.as_str()), ("", "g9"));
+        assert_eq!(orphan.key, "D9/v1/g9");
         assert_eq!(orphan.address, "quarantine/D9/v1/g9");
         assert_eq!(orphan.reason, DASH);
         assert_eq!(kpis[0].value, "2");
@@ -1184,6 +1211,73 @@ mod tests {
         }
         // An unknown code is named, not explained away.
         assert!(why_quarantined("SOMETHING_NEW").starts_with("Moved by a rule"));
+    }
+
+    #[test]
+    fn an_exception_object_is_found_at_the_mirrored_path_its_move_recorded() {
+        // build_exception_path re-homes the source path, so the address is deep and the
+        // leaf carries the extension -- and objects written before that change are flat.
+        let mirrored = "DMS/SO17033/SO17033-COPRSYPF550001/A1/Official/ee8d7527.zip";
+        assert_eq!(guid_in_path(mirrored), Some("ee8d7527"));
+        assert_eq!(guid_in_path("01M31SA9/v1/c87cbaa6-c6f9"), Some("c87cbaa6-c6f9"));
+        assert_eq!(guid_in_path("g"), Some("g"));
+        assert_eq!(guid_in_path(""), None);
+
+        let mut answer = quarantine_answer();
+        answer.docs[0].file_guid = "ee8d7527".into();
+        answer.docs[0].raw = Some(crate::monitoring::model::Location {
+            container: "raw".into(),
+            path: mirrored.into(),
+        });
+        answer.audit[0].detail = serde_json::json!({"reason": "ARCHIVE_ENCRYPTED", "targetPath": mirrored});
+        answer.blobs[0] = BlobCheck {
+            zone: "quarantine".into(),
+            container: "quarantine".into(),
+            container_exists: true,
+            path: Some(mirrored.into()),
+            exists: Some(true),
+            size: Some(413_715),
+            last_modified: Some("2026-09-25T08:11:42Z".into()),
+            error: None,
+        };
+        let (_, rows) = quarantine(&answer, t("2026-09-25T09:00:00Z"));
+        let row = rows.iter().find(|r| r.document_id == "D1").expect("D1");
+        assert_eq!(row.address, format!("quarantine/{mirrored}"));
+        assert!(!row.bytes_missing, "the object is right where the move said");
+        assert!(row.orphan == false && row.reason == "ARCHIVE_ENCRYPTED");
+        assert!(row.download.contains("--name DMS/SO17033/"), "{}", row.download);
+    }
+
+    #[test]
+    fn without_a_recorded_move_the_object_is_found_by_its_leaf_then_by_the_source_path() {
+        let mirrored = "DMS/SO17033/A1/Official/ee8d7527.zip";
+        let mut answer = quarantine_answer();
+        answer.audit.clear();
+        answer.docs[0].file_guid = "ee8d7527".into();
+        answer.docs[0].raw = Some(crate::monitoring::model::Location { container: "raw".into(), path: mirrored.into() });
+        answer.blobs[0].path = Some(mirrored.into());
+        let (_, rows) = quarantine(&answer, t("2026-09-25T09:00:00Z"));
+        let found = rows.iter().find(|r| r.document_id == "D1").expect("D1");
+        assert_eq!(found.address, format!("quarantine/{mirrored}"));
+        assert!(!found.bytes_missing);
+
+        // Nothing in the container: the mirrored source path is where it would be,
+        // reported as missing rather than as an invented flat address.
+        let mut absent = answer.clone();
+        absent.blobs.clear();
+        let (_, rows) = quarantine(&absent, t("2026-09-25T09:00:00Z"));
+        let missing = rows.iter().find(|r| r.document_id == "D1").expect("D1");
+        assert_eq!(missing.address, format!("quarantine/{mirrored}"));
+        assert!(missing.bytes_missing);
+
+        // Not even a source path to mirror: no address is claimed, and no download offered.
+        let mut unknown = absent.clone();
+        unknown.docs[0].raw = None;
+        unknown.docs[0].landing = None;
+        let (_, rows) = quarantine(&unknown, t("2026-09-25T09:00:00Z"));
+        let bare = rows.iter().find(|r| r.document_id == "D1").expect("D1");
+        assert_eq!(bare.address, DASH);
+        assert!(bare.download.is_empty() && bare.bytes_missing);
     }
 
     #[test]
@@ -1209,7 +1303,7 @@ mod tests {
     fn quarantine_sorts_by_the_column_asked_for() {
         let (_, rows) = quarantine(&quarantine_answer(), t("2026-08-14T09:00:00Z"));
         let by_moved = sorted(&rows, Some(Sort { column: 2, ascending: true }));
-        assert_eq!(by_moved.iter().map(|r| r.document_id.clone()).collect::<Vec<_>>(), vec!["D1", "D9", "D2"]);
+        assert_eq!(by_moved.iter().map(|r| r.key.clone()).collect::<Vec<_>>(), vec!["key-D1", "D9/v1/g9", "key-D2"]);
         let by_size = sorted(&rows, Some(Sort { column: 4, ascending: false }));
         assert_eq!(by_size[0].size, "60 B");
     }

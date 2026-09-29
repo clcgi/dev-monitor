@@ -20,12 +20,17 @@ pub enum MarkerKind {
     /// values come from: `# TOKEN: --case @file.csv:column  help`. A toggle
     /// cannot express this -- the app has to offer a list and send one of it.
     ChoiceHeader,
+    /// A header line declaring one flag whose value is FREE TEXT:
+    /// `# TOKEN: --batch-id  help`. A dropdown cannot express a batch id, a
+    /// document id or a date -- there is no list to read them from, and a
+    /// stale fixture offering yesterday's ids is worse than a blank field.
+    InputHeader,
     TraceBegin,
     TraceEnd,
 }
 
 impl MarkerKind {
-    pub const ALL: [MarkerKind; 9] = [
+    pub const ALL: [MarkerKind; 10] = [
         MarkerKind::StepStarted,
         MarkerKind::StepFinished,
         MarkerKind::Run,
@@ -33,6 +38,7 @@ impl MarkerKind {
         MarkerKind::ScriptHeader,
         MarkerKind::ArgHeader,
         MarkerKind::ChoiceHeader,
+        MarkerKind::InputHeader,
         MarkerKind::TraceBegin,
         MarkerKind::TraceEnd,
     ];
@@ -46,6 +52,7 @@ impl MarkerKind {
             Self::ScriptHeader => "Script header",
             Self::ArgHeader => "Argument header",
             Self::ChoiceHeader => "Choice header",
+            Self::InputHeader => "Input header",
             Self::TraceBegin => "Trace begin",
             Self::TraceEnd => "Trace end",
         }
@@ -59,13 +66,14 @@ impl MarkerKind {
             Self::ScriptHeader => "# TOKEN: category=Flows; steps=...",
             Self::ArgHeader => "# TOKEN: --apply  help text",
             Self::ChoiceHeader => "# TOKEN: --case @file.csv:column  help text",
+            Self::InputHeader => "# TOKEN: --batch-id  help text",
             Self::TraceBegin | Self::TraceEnd => "[TOKEN: HttpUploadSmall]",
         }
     }
 
     /// Headers run to the end of the line; the rest are bracketed.
     pub fn is_header(&self) -> bool {
-        matches!(self, Self::ScriptHeader | Self::ArgHeader | Self::ChoiceHeader)
+        matches!(self, Self::ScriptHeader | Self::ArgHeader | Self::ChoiceHeader | Self::InputHeader)
     }
 }
 
@@ -93,6 +101,7 @@ impl Default for MarkerSyntax {
                 m("CDW_SCRIPT", MarkerKind::ScriptHeader),
                 m("CDW_ARG", MarkerKind::ArgHeader),
                 m("CDW_CHOICE", MarkerKind::ChoiceHeader),
+                m("CDW_INPUT", MarkerKind::InputHeader),
                 m("CDW_TRACE_BEGIN", MarkerKind::TraceBegin),
                 m("CDW_TRACE_END", MarkerKind::TraceEnd),
             ],
@@ -143,13 +152,14 @@ mod tests {
     #[test]
     fn the_defaults_are_the_markers_the_app_shipped_with() {
         let s = MarkerSyntax::default();
-        assert_eq!(s.markers.len(), 9);
+        assert_eq!(s.markers.len(), 10);
         let tokens: Vec<&str> = s.markers.iter().map(|m| m.token.as_str()).collect();
         assert_eq!(
             tokens,
             [
                 "CDW_STEP", "CDW_STEP_DONE", "CDW_RUN", "CDW_RESULT",
-                "CDW_SCRIPT", "CDW_ARG", "CDW_CHOICE", "CDW_TRACE_BEGIN", "CDW_TRACE_END"
+                "CDW_SCRIPT", "CDW_ARG", "CDW_CHOICE", "CDW_INPUT",
+                "CDW_TRACE_BEGIN", "CDW_TRACE_END"
             ]
         );
     }
@@ -166,7 +176,7 @@ mod tests {
         let mut s = MarkerSyntax::default();
         s.markers.retain(|m| m.token != "CDW_STEP");
         assert_eq!(s.payload("[CDW_STEP: Raw]", MarkerKind::StepStarted), None);
-        assert_eq!(s.markers.len(), 8);
+        assert_eq!(s.markers.len(), 9);
     }
 
     #[test]
